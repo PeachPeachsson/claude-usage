@@ -264,7 +264,7 @@ export function UsageDashboard() {
   const errorMessage = errorMessages[activeProvider];
 
   useEffect(() => {
-    void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(ignoreOrientationLockError);
     void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
     const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
     return () => subscription.remove();
@@ -290,7 +290,7 @@ export function UsageDashboard() {
     requestTimeoutRef.current = null;
   }, []);
 
-  const rememberProviderConnection = useCallback((provider: UsageProvider, connected: boolean) => {
+  const persistProviderConnection = useCallback((provider: UsageProvider, connected: boolean) => {
     connectedProvidersRef.current = { ...connectedProvidersRef.current, [provider]: connected };
     void AsyncStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(connectedProvidersRef.current));
   }, []);
@@ -308,12 +308,12 @@ export function UsageDashboard() {
       const nextSnapshot = parseCodexUsagePayload(body);
       setSnapshots((current) => ({ ...current, codex: nextSnapshot }));
       setNeedsSignInByProvider((current) => ({ ...current, codex: false }));
-      rememberProviderConnection('codex', true);
+      persistProviderConnection('codex', true);
       setLoginStatus('Klart — Codex-kontot är anslutet.');
     } catch (error) {
       const message = friendlyError(error, 'codex', Boolean(snapshots.codex));
       if (error instanceof CodexAuthRequiredError) {
-        rememberProviderConnection('codex', false);
+        persistProviderConnection('codex', false);
         setNeedsSignInByProvider((current) => ({ ...current, codex: true }));
       }
       setErrorMessages((current) => ({ ...current, codex: message }));
@@ -322,7 +322,7 @@ export function UsageDashboard() {
       codexRefreshInFlightRef.current = false;
       setIsRefreshing(false);
     }
-  }, [rememberProviderConnection, snapshots.codex]);
+  }, [persistProviderConnection, snapshots.codex]);
 
   const refreshProvider = useCallback((provider: UsageProvider) => {
     if (requestIdRef.current) return;
@@ -507,14 +507,11 @@ export function UsageDashboard() {
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
-      try {
-        const raw = JSON.parse(event.nativeEvent.data) as { type?: string };
-        if (raw.type === 'google-login-blocked') {
-          setLoginStatus(GOOGLE_LOGIN_UNAVAILABLE);
-          void AccessibilityInfo.announceForAccessibility(GOOGLE_LOGIN_UNAVAILABLE);
-          return;
-        }
-      } catch {}
+      if (isGoogleLoginBlockedMessage(event.nativeEvent.data)) {
+        setLoginStatus(GOOGLE_LOGIN_UNAVAILABLE);
+        void AccessibilityInfo.announceForAccessibility(GOOGLE_LOGIN_UNAVAILABLE);
+        return;
+      }
       const provider = requestProviderRef.current;
       if (provider !== 'claude') return;
 
@@ -527,7 +524,7 @@ export function UsageDashboard() {
       setIsRefreshing(false);
 
       if (message.type === 'auth-required') {
-        rememberProviderConnection(provider, false);
+        persistProviderConnection(provider, false);
         if (isDisconnectingClaudeRef.current) {
           isDisconnectingClaudeRef.current = false;
           setSnapshots((current) => ({ ...current, claude: null }));
@@ -572,7 +569,7 @@ export function UsageDashboard() {
       try {
         const nextSnapshot = parseUsagePayload(message.body);
         setSnapshots((current) => ({ ...current, [provider]: nextSnapshot }));
-        rememberProviderConnection(provider, true);
+        persistProviderConnection(provider, true);
         setNeedsSignInByProvider((current) => ({ ...current, [provider]: false }));
         setErrorMessages((current) => ({ ...current, [provider]: null }));
         setLoginStatus(`Klart — ${PROVIDER_META[provider].label}-kontot är anslutet.`);
@@ -588,7 +585,7 @@ export function UsageDashboard() {
         setLoginStatus(text);
       }
     },
-    [clearRequestTimeout, isShowingLogin, rememberProviderConnection, snapshots],
+    [clearRequestTimeout, isShowingLogin, persistProviderConnection, snapshots],
   );
 
   const openCodexDevicePage = useCallback((authorization = codexLogin?.authorization) => {
@@ -630,7 +627,7 @@ export function UsageDashboard() {
           if (codexLoginGenerationRef.current !== generation) return;
 
           dismissOpenBrowser();
-          rememberProviderConnection('codex', true);
+          persistProviderConnection('codex', true);
           setNeedsSignInByProvider((current) => ({ ...current, codex: false }));
           setCodexLogin(null);
           setIsShowingLogin(false);
@@ -654,7 +651,7 @@ export function UsageDashboard() {
       setLoginStatus(message);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
-  }, [refreshCodexProvider, rememberProviderConnection]);
+  }, [persistProviderConnection, refreshCodexProvider]);
 
   const copyCodexCode = useCallback(async () => {
     const userCode = codexLogin?.authorization?.userCode;
@@ -716,7 +713,7 @@ export function UsageDashboard() {
     setIsShowingLogin(false);
     if (isMonitorMode) {
       setIsMonitorMode(false);
-      void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+      void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(ignoreOrientationLockError);
     }
     setActiveProvider(provider);
     void AsyncStorage.setItem(LAST_PROVIDER_STORAGE_KEY, provider);
@@ -759,7 +756,7 @@ export function UsageDashboard() {
                     return;
                   }
                 }
-                rememberProviderConnection(activeProvider, false);
+                persistProviderConnection(activeProvider, false);
                 setSnapshots((current) => ({ ...current, [activeProvider]: null }));
                 setErrorMessages((current) => ({ ...current, [activeProvider]: null }));
                 setNeedsSignInByProvider((current) => ({ ...current, [activeProvider]: true }));
@@ -775,18 +772,18 @@ export function UsageDashboard() {
         },
       ],
     );
-  }, [activeProvider, rememberProviderConnection]);
+  }, [activeProvider, persistProviderConnection]);
 
   const enterMonitorMode = useCallback(async () => {
     if (!snapshot) return;
     setIsMonitorMode(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
+    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(ignoreOrientationLockError);
   }, [snapshot]);
 
   const exitMonitorMode = useCallback(async () => {
     setIsMonitorMode(false);
-    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(ignoreOrientationLockError);
   }, []);
 
   const primaryWindow = snapshot?.windows.find((window) => window.id === 'five-hour') ?? snapshot?.windows[0] ?? null;
@@ -1487,6 +1484,21 @@ function isClaudeLoginURL(url: string): boolean {
   }
 }
 
+function isGoogleLoginBlockedMessage(value: string): boolean {
+  try {
+    const message: unknown = JSON.parse(value);
+    return Boolean(
+      message &&
+      typeof message === 'object' &&
+      'type' in message &&
+      message.type === 'google-login-blocked',
+    );
+  } catch {
+    // Other bridge messages are parsed by their provider-specific parser below.
+    return false;
+  }
+}
+
 function formatReset(window: UsageWindow, now = new Date()): string {
   const date = window.resetsAt;
   if (!date || !Number.isFinite(date.getTime())) return 'Återställningstid saknas';
@@ -1521,10 +1533,18 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function ignoreOrientationLockError(): void {
+  // Orientation locking is an enhancement and may be unavailable on some hosts.
+}
+
 function dismissOpenBrowser(): void {
   try {
-    void WebBrowser.dismissBrowser().catch(() => {});
-  } catch {}
+    void WebBrowser.dismissBrowser().catch(() => {
+      // The system browser may already be closed; dismissal is best effort.
+    });
+  } catch {
+    // Native dismissal can also throw synchronously when no browser is open.
+  }
 }
 
 function createStyles(palette: Palette, providerTheme: ProviderTheme) {

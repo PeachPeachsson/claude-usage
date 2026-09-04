@@ -238,6 +238,7 @@ function getAccountId(token: string): string | null {
       : '';
     return namespacedAccountId || readString(payload.chatgpt_account_id ?? payload.account_id) || null;
   } catch {
+    // Malformed or opaque tokens legitimately carry no readable account ID.
     return null;
   }
 }
