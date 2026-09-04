@@ -721,6 +721,14 @@ export function UsageDashboard() {
       ) : (
         <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <ScrollView
+          testID="dashboard-scroll"
+          style={styles.dashboardScroll}
+          automaticallyAdjustContentInsets={false}
+          automaticallyAdjustKeyboardInsets={false}
+          automaticallyAdjustsScrollIndicatorInsets={false}
+          contentInsetAdjustmentBehavior="never"
+          contentInset={{ bottom: 0, left: 0, right: 0, top: 0 }}
+          scrollIndicatorInsets={{ bottom: 0, left: 0, right: 0, top: 0 }}
           contentContainerStyle={[
             styles.content,
             { paddingBottom: Math.max(32, insets.bottom + 20) },

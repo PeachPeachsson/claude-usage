@@ -141,6 +141,18 @@ afterEach(() => {
 });
 
 describe('UsageDashboard characterization', () => {
+  it('owns its iOS scroll insets inside the safe area', async () => {
+    await render(<UsageDashboard />);
+    await settleEffects();
+
+    const scrollView = screen.getByTestId('dashboard-scroll');
+    expect(scrollView.props.automaticallyAdjustContentInsets).toBe(false);
+    expect(scrollView.props.automaticallyAdjustKeyboardInsets).toBe(false);
+    expect(scrollView.props.automaticallyAdjustsScrollIndicatorInsets).toBe(false);
+    expect(scrollView.props.contentInsetAdjustmentBehavior).toBe('never');
+    expect(scrollView.props.contentInset).toEqual({ bottom: 0, left: 0, right: 0, top: 0 });
+  });
+
   it('starts disconnected and offers Claude login', async () => {
     await render(<UsageDashboard />);
     await settleEffects();

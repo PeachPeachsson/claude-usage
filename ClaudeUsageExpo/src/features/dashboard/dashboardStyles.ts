@@ -7,6 +7,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     root: { flex: 1, backgroundColor: palette.root },
     hiddenTransport: { position: 'absolute', left: -4, bottom: -4, width: 2, height: 2, opacity: 0 },
     safeArea: { flex: 1 },
+    dashboardScroll: { flex: 1 },
     monitorRoot: { backgroundColor: '#0E0F11' },
     monitorSafeArea: { flex: 1, backgroundColor: '#0E0F11' },
     monitorShell: { flex: 1, paddingHorizontal: 18, paddingVertical: 12, gap: 12 },
