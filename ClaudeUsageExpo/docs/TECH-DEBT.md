@@ -4,13 +4,14 @@
 
 | Item | Location | Type | Risk | Effort | Priority | Status |
 |---|---|---|---|---|---|---|
-| Dashboarden äger UI, auth, nätverk, persistens, timers och native-effekter i samma 1 824-raders fil | `src/features/dashboard/UsageDashboard.tsx` | Struktur | Hög förändringsrisk och svår isolerad testning | L | P0 | Planerad Phase 2–3 |
-| Bridgeparsers accepterar okända typer och ofullständiga kända meddelanden | `src/infrastructure/*WebBridge.ts` | Typ-/runtime-säkerhet | Felaktig data kan passera TypeScript-gränsen | S | P0 | Karakteriserad; separat beteendefix krävs |
+| Dashboardens 1 060-raders koordinator äger fortfarande auth, nätverk, persistens, timers och native-effekter | `src/features/dashboard/UsageDashboard.tsx` | Struktur | Hög förändringsrisk i kvarvarande stateorkestrering | L | P0 | Presentation extraherad i Phase 3; controller/use-case-gränser planeras i Phase 5 |
+| Claude-bridgeparsern accepterar okända typer och ofullständiga kända meddelanden | `src/infrastructure/claudeWebBridge.ts` | Typ-/runtime-säkerhet | Felaktig data kan passera TypeScript-gränsen | S | P0 | Karakteriserad; separat beteendefix krävs |
 | Malformerad JSON visar rå `SyntaxError` i stället för lokaliserat fel | `src/domain/usage.ts` | Felhantering | Teknisk/engelsk text kan nå användaren | S | P1 | Karakteriserad; separat beteendefix krävs |
-| Två `exactOptionalPropertyTypes`-fel i oanvänd Expo-mallkod | `components/themed-*.tsx` | TypeScript/död kod | Brus i en framtida skärpt gate | S | P1 | Fem aktiva indexeringsfel lösta; resten tas bort i Phase 3 |
+| Två `exactOptionalPropertyTypes`-fel i oanvänd Expo-mallkod | Borttagen create-expo-mall | TypeScript/död kod | Brus i en framtida skärpt gate | S | P1 | Löst i Phase 3; samtliga beslutade TypeScript-regler är aktiva |
 | Snapshots lagras endast i minne | Dashboardstate | Resiliens/dokumentation | Senast hämtat värde försvinner vid kallstart | M | P1 | Beslut krävs före beteendeändring |
-| Codex WebView-transport är oanvänd utom URL-konstanter | `src/infrastructure/codexWebBridge.ts` | Död kod | Dubbla implementationsvägar driver isär | S | P1 | Kandidat för borttagning efter testseparation |
-| Oanvänd create-expo-app-mallkod ligger kvar | `components/`, `hooks/`, `constants/` | Död kod | Brus och falska TypeScript-fel | S | P1 | Kandidat för borttagning i separat strukturcommit |
+| Codex WebView-transport är oanvänd utom URL-konstanter | Ersatt av `src/infrastructure/codexWeb.ts` | Död kod | Dubbla implementationsvägar driver isär | S | P1 | Löst i Phase 3; oanvänd transport och dess tester borttagna |
+| Oanvänd create-expo-app-mallkod ligger kvar | Borttagna `components/`, `hooks/`, `constants/` och reset-script | Död kod | Brus och falska TypeScript-fel | S | P1 | Löst i Phase 3 |
+| Lyckad Codex-refresh kunde återtrigga starteffekten utan slut | Dashboardens refreshcallbacks | State-/effektfel | Upprepade nätverksanrop och möjlig batteri-/rate-limit-påverkan | S | P0 | Löst med stabil callback och senaste snapshot-ref; regressionstest tillagt |
 | Codex usage bygger på intern, odokumenterad endpoint | `src/infrastructure/codexDeviceAuth.ts` | Integrationsrisk | Schemat eller routen kan ändras utan förvarning | M | P0 före release | Phase 7 |
 | Tillfälligt nätfel under device-code-poll avbryter hela loginflödet | `UsageDashboard.tsx`, Codex auth | Resiliens | Onödig misslyckad onboarding | M | P1 | Phase 7/beteendefix |
 | Ingen CI kör lint, TypeScript eller tester | Repository | Leveransrisk | Regressioner kan mergeas trots lokal gate | S | P0 före release | Öppen |
@@ -21,12 +22,24 @@
 
 | Smell | Location | Refactoring | Status |
 |---|---|---|---|
-| Long Function / Large Component | `UsageDashboard` | Extract Function, Extract Component och Introduce Parameter Object efter pinning | Inventerad |
-| Blandade abstraktionsnivåer | Dashboard callbacks och renderträd | Extract orchestration hooks/use cases stegvis | Inventerad |
+| Long Function / Large Component | `UsageDashboard` | Extract controller/use-case hooks efter fortsatt authpinning | Delvis löst: tema, styles, displayregler och paneler flyttade; orkestrering återstår till Phase 5 |
+| Blandade abstraktionsnivåer | Dashboard callbacks och renderträd | Extract orchestration hooks/use cases stegvis | Delvis löst i presentationen; state-/effektlagret återstår |
 | Primitive obsession kring provider/state records | Dashboard | Introduce domain types/state reducer efter testutökning | Inventerad |
-| Duplicerad bridgeunion och envelope-parser | Claude/Codex bridges | Extract shared validated message decoder, om båda transporterna består | Inventerad |
+| Duplicerad bridgeunion och envelope-parser | Claude/Codex bridges | Remove Dead Code | Löst genom borttagning av den oanvända Codex-bridgen |
 | Contextless catches | Dashboard/native fallback och JWT-parser | Behåll endast avsiktliga boundary-catches; logga/typbestäm övriga | Löst i aktiva flöden; oanvänd bridge tas bort i Phase 3 |
-| Dead code | Codex WebView bridge och Expo-mall | Remove Dead Code | Inventerad |
+| Dead code | Codex WebView bridge och Expo-mall | Remove Dead Code | Löst i två separata strukturcommits |
+
+## Phase 3 Refactoring Log
+
+| Smell | Named refactoring | Result |
+|---|---|---|
+| Dead Code / Speculative Generality | Remove Dead Code | 590 rader Expo-mall och oanvänd Codex-WebView-transport borttagna |
+| Divergent Change | Extract Module | Tema och StyleSheet isolerade från dashboardkoordinatorn |
+| Feature Envy / blandade abstraktionsnivåer | Move Function | Provider-/displayregler flyttade till `dashboardModel.ts` |
+| Large Component | Extract Component | Monitor och kapacitetspaneler flyttade till `DashboardPanels.tsx` |
+| Svag statisk gate | Introduce Assertion via compiler options | Sex strikta TypeScript-skydd körs permanent i `npm run check` |
+
+Strukturpoäng efter Phase 3: **6/10**. Vägen till 10/10 kräver främst separata auth-/refreshcontrollers, en explicit state-modell, full runtimevalidering av Claude-bridge och CI-gaten. Detta hör hemma i Phase 5 och Phase 7 snarare än i en större osäker Phase 3-omskrivning.
 
 ## Sprout / Wrap Register
 

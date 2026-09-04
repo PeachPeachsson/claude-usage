@@ -9,7 +9,7 @@
 - Lagring: WebView-cookies för Claude, iOS Keychain via Expo SecureStore för Codex och AsyncStorage för icke-känsliga preferenser.
 - Externa beroenden: Claude-webb/API och OpenAI auth/ChatGPT usage. Codex usage använder en intern, odokumenterad endpoint.
 - Startmodul: `src/features/dashboard/UsageDashboard.tsx`, med `src/domain/usage.ts` som första rena testpunkt.
-- Nuläge: lint, TypeScript och 59 automatiserade tester är gröna. `noUncheckedIndexedAccess` är permanent aktiverat; två `exactOptionalPropertyTypes`-fel återstår endast i oanvänd Expo-mallkod. CI saknas.
+- Nuläge: lint, fullt skärpt TypeScript och 55 automatiserade tester är gröna. Testsviten täcker 75,82 % av appkodens rader. CI saknas.
 - Produktion: repositoryt visar pre-release/prototyp. Ingen verifierad distribution eller användarvolym finns dokumenterad; antagandet ska omprövas före Phase 7.
 - Godkänd omfattning: Phase 1–3 nu, Phase 5 och 7 före release, Phase 8–9 uppskjutna tills faktisk backend/data/load finns.
 
@@ -19,8 +19,8 @@
 |---|---|---|---|---|
 | 1 — Build the safety net | working-with-legacy-code | done | TESTING.md + TECH-DEBT.md (GATE) | 2026-09-04 |
 | 2 — Make the code readable | clean-code | done | TECH-DEBT.md | 2026-09-04 |
-| 3 — Apply named refactorings | refactoring-patterns | in-progress | TECH-DEBT.md | 2026-09-04 |
-| 4 — Reduce complexity | software-design-philosophy | deferred: utvärderas efter Phase 3 | TECH-DEBT.md | 2026-09-04 |
+| 3 — Apply named refactorings | refactoring-patterns | done | TECH-DEBT.md | 2026-09-04 |
+| 4 — Reduce complexity | software-design-philosophy | deferred: huvudkomponentens återstående orkestrering hanteras med arkitekturgränser i Phase 5 | TECH-DEBT.md | 2026-09-04 |
 | 5 — Draw the architecture boundary | clean-architecture | deferred: genomförs före release | ARCHITECTURE.md | 2026-09-04 |
 | 6 — Lock in the habits | pragmatic-programmer | deferred: utvärderas efter strukturpasset | TECH-DEBT.md | 2026-09-04 |
 | 7 — Make it survive production | release-it | deferred: genomförs före release | RELIABILITY.md | 2026-09-04 |
@@ -43,6 +43,10 @@ Statuses: pending · in-progress · awaiting-evidence · done · deferred: <reas
 | 2026-09-04 | 2 | Aktivera `noUncheckedIndexedAccess`, rätta fem aktiva indexeringsrisker och lämna två mallkodsfel till Remove Dead Code. | Skärper den permanenta gaten utan att blanda in oanvänd mallkod eller beteendefixar. |
 | 2026-09-04 | 2 | Använd `npm run check` som objektiv gate; Clean Code-poängen är diagnostisk. | En reproducerbar gate är mer tillförlitlig än en subjektiv poäng. |
 | 2026-09-04 | 3 | Tillämpa Remove Dead Code före Extract Function/Component och Move Function. | Mindre yta och färre falska beroenden gör dashboardseparationen säkrare. |
+| 2026-09-04 | 3 | Ta bort Codex WebView-transporten och behåll endast URL-policyn bredvid device-code-integrationen. | Appen använde aldrig transporten; en andra authväg gav Speculative Generality och dubbla kontrakt. |
+| 2026-09-04 | 3 | Dela presentationen i tema, StyleSheet, displaymodell och panelkomponenter men lämna stateorkestreringen till Phase 5. | Flytten isolerar visuella ändringar utan att införa en halv arkitektur eller röra opinnade authgrenar. |
+| 2026-09-04 | 3 | Pausa refaktorering och rätta en upptäckt oändlig Codex-refresh i separat beteendecommit. | Ett nytt rött karakteriseringstest visade att callback-identitet återtriggade starteffekten efter varje lyckad hämtning. |
+| 2026-09-04 | 3 | Aktivera `exactOptionalPropertyTypes`, `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns` och `noFallthroughCasesInSwitch`. | Remove Dead Code eliminerade de sista hindren för en permanent skärpt TypeScript-gate. |
 
 ## Next Actions
 
@@ -54,5 +58,8 @@ Statuses: pending · in-progress · awaiting-evidence · done · deferred: <reas
 - [x] Kör clean-code-audit med poäng, prioriterad fixlista och felhanteringsinventering (Codex, 2026-09-04).
 - [x] Fatta beslut om Phase 2-fixar, kodkonventioner och eventuell CI-scoregate (Codex + användare, 2026-09-04).
 - [x] Aktivera `noUncheckedIndexedAccess`, rätta fem aktiva fel och dokumentera best-effort-gränser (Codex, 2026-09-04).
-- [ ] Ta bort verifierat död Expo-mallkod och oanvänd Codex-WebView-transport (Codex, Phase 3).
-- [ ] Dela dashboarden med namngivna refaktoreringar inom Safety Net Map (Codex, Phase 3).
+- [x] Ta bort verifierat död Expo-mallkod och oanvänd Codex-WebView-transport (Codex, 2026-09-04).
+- [x] Dela dashboardens presentation med Extract Module och Move Function inom Safety Net Map (Codex, 2026-09-04).
+- [x] Pinna och rätta den oändliga Codex-refreshloopen i separat beteendecommit (Codex, 2026-09-04).
+- [ ] Inför tydliga use-case-/controller-gränser för auth, refresh och persistens (Codex, Phase 5 före release).
+- [ ] Lägg till produktionsskydd för de odokumenterade externa integrationerna (Codex, Phase 7 före release).
