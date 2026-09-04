@@ -285,3 +285,5 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     disconnectButtonText: { color: palette.danger, fontSize: 16, fontWeight: '700' },
   });
 }
+
+export type DashboardStyles = ReturnType<typeof createDashboardStyles>;
