@@ -123,7 +123,9 @@ function mapCodexWindowsByDuration(candidates: ParsedCodexWindow[]): UsageWindow
   const remaining = [...candidates];
   const take = (predicate: (window: ParsedCodexWindow) => boolean): ParsedCodexWindow | null => {
     const index = remaining.findIndex(predicate);
-    return index === -1 ? null : remaining.splice(index, 1)[0];
+    if (index === -1) return null;
+    const [matchedWindow] = remaining.splice(index, 1);
+    return matchedWindow ?? null;
   };
 
   // Codex can return a weekly-only limit in primary_window. The declared duration,

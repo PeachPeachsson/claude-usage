@@ -227,8 +227,10 @@ function parseRequiredTokens(value: unknown): CodexTokenSet {
 
 function getAccountId(token: string): string | null {
   try {
-    const encodedPayload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    const paddedPayload = encodedPayload.padEnd(Math.ceil(encodedPayload.length / 4) * 4, '=');
+    const encodedPayload = token.split('.')[1];
+    if (!encodedPayload) return null;
+    const normalizedPayload = encodedPayload.replace(/-/g, '+').replace(/_/g, '/');
+    const paddedPayload = normalizedPayload.padEnd(Math.ceil(normalizedPayload.length / 4) * 4, '=');
     const payload = JSON.parse(atob(paddedPayload)) as Record<string, unknown>;
     const auth = payload['https://api.openai.com/auth'];
     const namespacedAccountId = auth && typeof auth === 'object'

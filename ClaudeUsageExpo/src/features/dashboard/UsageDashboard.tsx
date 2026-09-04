@@ -378,7 +378,7 @@ export function UsageDashboard() {
     void AsyncStorage.multiGet([CONNECTION_STORAGE_KEY, LAST_PROVIDER_STORAGE_KEY, REFRESH_HINT_STORAGE_KEY])
       .then((entries) => {
         if (cancelled) return;
-        const storedValue = entries[0][1];
+        const storedValue = entries[0]?.[1] ?? null;
         if (storedValue) {
           const stored = JSON.parse(storedValue) as Partial<ProviderRecord<boolean>>;
           const connected: ProviderRecord<boolean> = {
@@ -388,9 +388,9 @@ export function UsageDashboard() {
           connectedProvidersRef.current = connected;
           setNeedsSignInByProvider({ claude: !connected.claude, codex: !connected.codex });
         }
-        const storedProvider = entries[1][1];
+        const storedProvider = entries[1]?.[1] ?? null;
         if (storedProvider === 'claude' || storedProvider === 'codex') setActiveProvider(storedProvider);
-        setShowRefreshHint(entries[2][1] !== 'true');
+        setShowRefreshHint(entries[2]?.[1] !== 'true');
       })
       .catch(() => {
         if (cancelled) return;
