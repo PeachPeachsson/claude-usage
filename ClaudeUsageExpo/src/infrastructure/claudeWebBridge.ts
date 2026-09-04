@@ -38,7 +38,7 @@ export function buildUsageRequestScript(requestId: string): string {
           post({
             type: 'bridge-error',
             requestId,
-            message: 'Claude returned HTTP ' + organizationsResponse.status + ' while loading the account.'
+            message: 'Claude kunde inte öppna kontot. Försök igen.'
           });
           return;
         }
@@ -56,7 +56,7 @@ export function buildUsageRequestScript(requestId: string): string {
         const organizationId = preferred && (preferred.uuid || preferred.id);
 
         if (!organizationId) {
-          post({ type: 'bridge-error', requestId, message: 'No Claude account with usage information was found.' });
+          post({ type: 'bridge-error', requestId, message: 'Inga användningsgränser hittades för det här Claude-kontot.' });
           return;
         }
 
@@ -80,7 +80,7 @@ export function buildUsageRequestScript(requestId: string): string {
         post({
           type: 'bridge-error',
           requestId,
-          message: error instanceof Error ? error.message : 'The Claude request failed.'
+          message: 'Claude kunde inte nås. Kontrollera internet och försök igen.'
         });
       }
     })();

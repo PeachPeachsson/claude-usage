@@ -1,6 +1,6 @@
-# Claude + Codex Usage — Expo spike
+# Kapacitet — Claude + Codex
 
-React Native/Expo Go version of EXP-001. Claude uses a private, persistent WebView session. Codex uses OpenAI's device-code OAuth flow in Safari and stores its tokens in iOS Keychain. No password, cookie, account identifier, or usage value is sent to an app-owned server.
+En iPhone-app som visar hur mycket AI-kapacitet som finns kvar och när gränserna fylls på. Claude använder en privat, beständig WebView-inloggning. Codex använder OpenAI:s enhetskod i Safari och sparar inloggningen i iOS-nyckelringen. Inga lösenord, cookies, kontoidentifierare eller gränsvärden skickas till en appägd server.
 
 ## Run with Expo Go
 
@@ -9,7 +9,7 @@ npm install
 npx expo start
 ```
 
-Scan the QR code with the iPhone Camera app and switch between Claude and Codex from the dashboard. Claude is connected inside its WebView. Codex opens OpenAI in Safari, where email, Google, Apple, Microsoft, and phone sign-in can be used.
+Skanna QR-koden med iPhone-kameran och växla mellan Claude och Codex på dashboarden. Claude ansluts i appens WebView. Codex öppnar OpenAI i Safari, där e-post, Google, Apple, Microsoft eller telefon kan användas.
 
 Codex uses the user's ChatGPT/OpenAI login. Before the first connection, OpenAI requires **Enable device code authorization for Codex** under ChatGPT → Settings → Security. The app links directly to that setting, then creates and copies a one-time code. After authorization, access, ID, and refresh tokens are stored in iOS Keychain through Expo SecureStore. React Native AsyncStorage contains only a connected/not-connected preference. Tokens are refreshed automatically and removed if OpenAI rejects the refresh token.
 
@@ -20,10 +20,12 @@ Codex uses the user's ChatGPT/OpenAI login. Before the first connection, OpenAI 
 - Five-hour, weekly, and Claude model-scoped usage
 - Reset times and freshness
 - Automatic refresh once per minute while the app is active
-- Refresh duration and anonymized observation sharing
+- Tydlig felåterställning utan att ett senast hämtat värde försvinner
+- Ett uttryckligt liggande monitorläge
+- VoiceOver, Dynamic Type, Reduce Motion och haptisk feedback
 - Persistent Claude WebView session and Codex Keychain tokens, so reopening the app normally does not require a new login
 
-The Expo Go build is the experiment client. An App Store release should use an Expo development build so the app has its own native container rather than Expo Go's shared host.
+Expo Go stöder hela läs- och inloggningsflödet. Full lokal cookie-rensning vid frånkoppling kräver en Expo development build; i Expo Go öppnar appen i stället Claudes egen utloggning. En App Store-version bör alltid använda en egen native-container.
 
 Codex quota is currently read from ChatGPT's authenticated `/backend-api/wham/usage` response. This is an internal, undocumented endpoint and should be isolated behind the existing bridge because its route or response schema may change.
 

@@ -16,8 +16,8 @@ export function parseUsagePayload(body: string, fetchedAt = new Date()): UsageSn
   const payload = asRecord(JSON.parse(body));
   const windows: UsageWindow[] = [];
 
-  const fiveHour = parseWindow(payload.five_hour, 'five-hour', '5-hour window');
-  const weekly = parseWindow(payload.seven_day, 'weekly', 'Weekly window');
+  const fiveHour = parseWindow(payload.five_hour, 'five-hour', 'Fem timmar');
+  const weekly = parseWindow(payload.seven_day, 'weekly', 'Vecka');
 
   if (fiveHour) windows.push(fiveHour);
   if (weekly) windows.push(weekly);
@@ -26,14 +26,14 @@ export function parseUsagePayload(body: string, fetchedAt = new Date()): UsageSn
   if (scoped) windows.push(scoped);
 
   if (windows.length === 0) {
-    throw new Error('Claude returned usage data in an unsupported format.');
+    throw new Error('Appen kunde inte läsa svaret från Claude. Försök igen.');
   }
 
   return { windows, fetchedAt };
 }
 
 export function parseCodexUsagePayload(body: string, fetchedAt = new Date()): UsageSnapshot {
-  const payload = asRecord(JSON.parse(body), 'Codex returnerade ett ogiltigt svar.');
+  const payload = asRecord(JSON.parse(body), 'Appen kunde inte läsa svaret från Codex. Försök igen.');
   const rateLimits = getRecord(payload.rate_limit) ?? getRecord(payload.rateLimits) ?? payload;
   const primary = parseCodexWindow(rateLimits.primary_window ?? rateLimits.primary, fetchedAt);
   const secondary = parseCodexWindow(rateLimits.secondary_window ?? rateLimits.secondary, fetchedAt);
@@ -41,24 +41,10 @@ export function parseCodexUsagePayload(body: string, fetchedAt = new Date()): Us
   const windows = mapCodexWindowsByDuration(candidates);
 
   if (windows.length === 0) {
-    throw new Error('Codex returnerade usage-data i ett format som appen inte stöder.');
+    throw new Error('Appen kunde inte läsa svaret från Codex. Försök igen.');
   }
 
   return { windows, fetchedAt };
-}
-
-export function createExperimentReport(snapshot: UsageSnapshot, durationSeconds: number): string {
-  const lines = snapshot.windows.map((window) => {
-    const reset = window.resetsAt?.toISOString() ?? 'unavailable';
-    return `${window.title}: ${formatNumber(window.utilization)}% | reset: ${reset}`;
-  });
-
-  return [
-    'EXP-001 app observation',
-    `Observed at: ${snapshot.fetchedAt.toISOString()}`,
-    `Refresh duration: ${durationSeconds.toFixed(2)} s`,
-    ...lines,
-  ].join('\n');
 }
 
 export function clampUtilization(value: number): number {
@@ -90,7 +76,7 @@ function parseScopedWindow(value: unknown): UsageWindow | null {
 
     const scope = isRecord(item.scope) ? item.scope : null;
     const model = scope && isRecord(scope.model) ? scope.model : null;
-    const title = model && typeof model.display_name === 'string' ? model.display_name : 'Model limit';
+    const title = model && typeof model.display_name === 'string' ? model.display_name : 'Modellgräns';
 
     return [{
       id: 'scoped',
@@ -154,10 +140,10 @@ function mapCodexWindowsByDuration(candidates: ParsedCodexWindow[]): UsageWindow
   const windows: UsageWindow[] = [];
 
   if (fallbackFiveHour) {
-    windows.push({ ...fallbackFiveHour, id: 'five-hour', title: '5-hour window' });
+    windows.push({ ...fallbackFiveHour, id: 'five-hour', title: 'Fem timmar' });
   }
   if (fallbackWeekly) {
-    windows.push({ ...fallbackWeekly, id: 'weekly', title: 'Weekly window' });
+    windows.push({ ...fallbackWeekly, id: 'weekly', title: 'Vecka' });
   }
 
   return windows;
@@ -190,18 +176,11 @@ function getRecord(value: unknown): JsonRecord | null {
   return isRecord(value) ? value : null;
 }
 
-function asRecord(value: unknown, errorMessage = 'Claude returned an invalid response.'): JsonRecord {
+function asRecord(value: unknown, errorMessage = 'Appen kunde inte läsa svaret från Claude. Försök igen.'): JsonRecord {
   if (!isRecord(value)) throw new Error(errorMessage);
   return value;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat('en-US', {
-    maximumFractionDigits: 2,
-    useGrouping: false,
-  }).format(value);
 }

@@ -36,7 +36,7 @@ type CodexTokenSet = {
 };
 
 export class CodexAuthRequiredError extends Error {
-  constructor(message = 'Codex behöver anslutas till ditt ChatGPT-konto.') {
+  constructor(message = 'Logga in igen för att uppdatera Codex.') {
     super(message);
     this.name = 'CodexAuthRequiredError';
   }
@@ -50,7 +50,7 @@ export async function requestCodexDeviceAuthorization(): Promise<CodexDeviceAuth
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI kunde inte starta inloggningen (${response.status}).`);
+    throw new Error('OpenAI kunde inte starta inloggningen. Försök igen.');
   }
 
   const payload = await response.json() as Record<string, unknown>;
@@ -60,7 +60,7 @@ export async function requestCodexDeviceAuthorization(): Promise<CodexDeviceAuth
   const expiresAt = parseExpiry(payload.expires_at);
 
   if (!deviceAuthId || !userCode) {
-    throw new Error('OpenAI skickade ingen giltig inloggningskod.');
+    throw new Error('Ingen engångskod skapades. Försök igen.');
   }
 
   return {
@@ -85,13 +85,13 @@ export async function pollCodexDeviceAuthorization(
   });
 
   if (response.status === 403 || response.status === 404) return null;
-  if (!response.ok) throw new Error(`OpenAI avbröt inloggningen (${response.status}).`);
+  if (!response.ok) throw new Error('OpenAI avbröt inloggningen. Skapa en ny kod och försök igen.');
 
   const payload = await response.json() as Record<string, unknown>;
   const authorizationCode = readString(payload.authorization_code);
   const codeVerifier = readString(payload.code_verifier);
   if (!authorizationCode || !codeVerifier) {
-    throw new Error('OpenAI skickade ett ofullständigt inloggningssvar.');
+    throw new Error('OpenAI kunde inte bekräfta inloggningen. Skapa en ny kod.');
   }
 
   return { authorizationCode, codeVerifier };
@@ -112,7 +112,7 @@ export async function completeCodexDeviceAuthorization(success: DeviceCodeSucces
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI kunde inte slutföra inloggningen (${response.status}).`);
+    throw new Error('OpenAI kunde inte slutföra inloggningen. Försök igen.');
   }
 
   const tokens = parseRequiredTokens(await response.json());
@@ -131,9 +131,9 @@ export async function fetchCodexUsageWithStoredAuth(): Promise<string> {
 
   if (response.status === 401 || response.status === 403) {
     await clearCodexAuth();
-    throw new CodexAuthRequiredError('OpenAI-sessionen har löpt ut. Logga in igen.');
+    throw new CodexAuthRequiredError('Din Codex-inloggning har gått ut. Logga in igen.');
   }
-  if (!response.ok) throw new Error(`Codex usage kunde inte hämtas (${response.status}).`);
+  if (!response.ok) throw new Error('Codex kunde inte uppdateras. Försök igen om en stund.');
   return response.text();
 }
 
@@ -172,7 +172,7 @@ async function refreshTokens(current: CodexTokenSet): Promise<CodexTokenSet> {
 
   if (!response.ok) {
     await clearCodexAuth();
-    throw new CodexAuthRequiredError('OpenAI-sessionen kunde inte förnyas. Logga in igen.');
+    throw new CodexAuthRequiredError('Din Codex-inloggning kunde inte förnyas. Logga in igen.');
   }
 
   const payload = await response.json() as Record<string, unknown>;
@@ -211,7 +211,7 @@ async function loadTokens(): Promise<CodexTokenSet | null> {
 }
 
 function parseRequiredTokens(value: unknown): CodexTokenSet {
-  if (!value || typeof value !== 'object') throw new Error('OpenAI skickade inga tokens.');
+  if (!value || typeof value !== 'object') throw new Error('OpenAI kunde inte bekräfta inloggningen. Försök igen.');
   const payload = value as Record<string, unknown>;
   const accessToken = readString(payload.access_token);
   const idToken = readString(payload.id_token);
@@ -221,7 +221,7 @@ function parseRequiredTokens(value: unknown): CodexTokenSet {
     getAccountId(idToken) ||
     getAccountId(accessToken) ||
     '';
-  if (!accessToken || !idToken || !refreshToken) throw new Error('OpenAI skickade ett ofullständigt tokensvar.');
+  if (!accessToken || !idToken || !refreshToken) throw new Error('OpenAI kunde inte slutföra inloggningen. Försök igen.');
   return { accessToken, idToken, refreshToken, accountId };
 }
 

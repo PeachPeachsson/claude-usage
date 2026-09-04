@@ -1,29 +1,32 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { StatusBar } from 'expo-status-bar';
+import { SymbolView } from 'expo-symbols';
 import * as WebBrowser from 'expo-web-browser';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
+  Alert,
+  Animated,
   AppState,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   useColorScheme,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import WebView, { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
 
 import {
-  createExperimentReport,
   parseCodexUsagePayload,
   parseUsagePayload,
   UsageSnapshot,
@@ -45,6 +48,7 @@ import {
   CodexAuthRequiredError,
   CodexDeviceAuthorization,
   CODEX_SECURITY_SETTINGS_URL,
+  clearCodexAuth,
   completeCodexDeviceAuthorization,
   fetchCodexUsageWithStoredAuth,
   pollCodexDeviceAuthorization,
@@ -57,16 +61,42 @@ const GOOGLE_LOGIN_UNAVAILABLE =
   'Google tillåter inte den här inbäddade inloggningen. Använd e-post eller Fortsätt med Apple.';
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
 const CONNECTION_STORAGE_KEY = 'usage-monitor.connected-providers.v1';
+const LAST_PROVIDER_STORAGE_KEY = 'usage-monitor.last-provider.v1';
+const REFRESH_HINT_STORAGE_KEY = 'usage-monitor.refresh-hint-seen.v1';
+
+const CLAUDE_LOGIN_GUARD_SCRIPT = `
+  (function () {
+    if (window.__usageLoginGuardInstalled) return true;
+    window.__usageLoginGuardInstalled = true;
+    function isGoogleTarget(element) {
+      var target = element && element.closest ? element.closest('a, button, [role="button"]') : null;
+      if (!target) return false;
+      var text = (target.innerText || target.getAttribute('aria-label') || '').toLowerCase();
+      var href = (target.href || '').toLowerCase();
+      return text.indexOf('google') >= 0 || href.indexOf('accounts.google.') >= 0;
+    }
+    document.addEventListener('click', function (event) {
+      if (!isGoogleTarget(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'google-login-blocked' }));
+    }, true);
+  })();
+  true;
+`;
 
 type UsageProvider = 'claude' | 'codex';
 type ProviderRecord<T> = Record<UsageProvider, T>;
-type CodexLoginPhase = 'prerequisite' | 'starting' | 'waiting' | 'finishing' | 'error';
+type CodexLoginPhase = 'starting' | 'waiting' | 'finishing' | 'error';
 
 type CodexLoginState = {
   authorization: CodexDeviceAuthorization | null;
   errorMessage: string | null;
   phase: CodexLoginPhase;
 };
+
+type IOSSymbolName = Extract<ComponentProps<typeof SymbolView>['name'], string>;
+type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
 const PROVIDERS: UsageProvider[] = ['claude', 'codex'];
 const PROVIDER_META: Record<UsageProvider, { label: string; homeURL: string; loginURL: string }> = {
@@ -188,7 +218,6 @@ const DARK_PALETTE: Palette = {
 
 export function UsageDashboard() {
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
   const colorScheme = useColorScheme();
   const [activeProvider, setActiveProvider] = useState<UsageProvider>('claude');
   const appearance = colorScheme === 'dark' ? 'dark' : 'light';
@@ -199,41 +228,62 @@ export function UsageDashboard() {
   );
   const styles = useMemo(() => createStyles(palette, providerTheme), [palette, providerTheme]);
   const webViewRef = useRef<WebView>(null);
+  const loginWebViewRef = useRef<WebView>(null);
   const webViewProviderRef = useRef<UsageProvider>('claude');
   const requestIdRef = useRef<string | null>(null);
   const requestProviderRef = useRef<UsageProvider | null>(null);
-  const requestStartedAtRef = useRef(0);
   const requestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshAttemptAtRef = useRef<ProviderRecord<number>>({ claude: 0, codex: 0 });
-  const pendingRefreshRef = useRef(true);
+  const pendingRefreshRef = useRef(false);
   const isWebReadyRef = useRef(false);
   const connectedProvidersRef = useRef<ProviderRecord<boolean>>({ claude: false, codex: false });
   const codexRefreshInFlightRef = useRef(false);
   const codexLoginGenerationRef = useRef(0);
+  const isDisconnectingClaudeRef = useRef(false);
 
   const [snapshots, setSnapshots] = useState<ProviderRecord<UsageSnapshot | null>>({ claude: null, codex: null });
-  const [lastRefreshDurations, setLastRefreshDurations] = useState<ProviderRecord<number | null>>({
-    claude: null,
-    codex: null,
-  });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [connectionsHydrated, setConnectionsHydrated] = useState(false);
   const [needsSignInByProvider, setNeedsSignInByProvider] = useState<ProviderRecord<boolean>>({ claude: true, codex: true });
   const [isShowingLogin, setIsShowingLogin] = useState(false);
   const [errorMessages, setErrorMessages] = useState<ProviderRecord<string | null>>({ claude: null, codex: null });
-  const [loginStatus, setLoginStatus] = useState('Laddar Claudes säkra inloggning…');
+  const [loginStatus, setLoginStatus] = useState('Öppnar Claudes säkra inloggning…');
   const [codexLogin, setCodexLogin] = useState<CodexLoginState | null>(null);
   const [isCodexCodeCopied, setIsCodexCodeCopied] = useState(false);
   const [webSourceURL, setWebSourceURL] = useState(CLAUDE_HOME_URL);
+  const [isShowingAccount, setIsShowingAccount] = useState(false);
+  const [isMonitorMode, setIsMonitorMode] = useState(false);
+  const [transportKey, setTransportKey] = useState(0);
+  const [showRefreshHint, setShowRefreshHint] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [contentOpacity] = useState(() => new Animated.Value(1));
 
   const snapshot = snapshots[activeProvider];
-  const lastRefreshDuration = lastRefreshDurations[activeProvider];
   const needsSignIn = needsSignInByProvider[activeProvider];
   const errorMessage = errorMessages[activeProvider];
 
   useEffect(() => {
-    void ScreenOrientation.unlockAsync();
+    void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (!codexLogin?.authorization) return;
+    const interval = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(interval);
+  }, [codexLogin?.authorization]);
+
+  useEffect(() => {
+    if (reduceMotion) {
+      contentOpacity.setValue(1);
+      return;
+    }
+    contentOpacity.setValue(0.72);
+    Animated.timing(contentOpacity, { duration: 180, toValue: 1, useNativeDriver: true }).start();
+  }, [activeProvider, contentOpacity, reduceMotion, snapshot?.fetchedAt]);
 
   const clearRequestTimeout = useCallback(() => {
     if (requestTimeoutRef.current) clearTimeout(requestTimeoutRef.current);
@@ -257,26 +307,22 @@ export function UsageDashboard() {
       const body = await fetchCodexUsageWithStoredAuth();
       const nextSnapshot = parseCodexUsagePayload(body);
       setSnapshots((current) => ({ ...current, codex: nextSnapshot }));
-      setLastRefreshDurations((current) => ({ ...current, codex: (Date.now() - startedAt) / 1000 }));
       setNeedsSignInByProvider((current) => ({ ...current, codex: false }));
       rememberProviderConnection('codex', true);
       setLoginStatus('Klart — Codex-kontot är anslutet.');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Codex usage kunde inte hämtas.';
-      // Never leave an older snapshot visible when the latest live request failed.
-      setSnapshots((current) => ({ ...current, codex: null }));
+      const message = friendlyError(error, 'codex', Boolean(snapshots.codex));
       if (error instanceof CodexAuthRequiredError) {
         rememberProviderConnection('codex', false);
         setNeedsSignInByProvider((current) => ({ ...current, codex: true }));
-      } else {
-        setErrorMessages((current) => ({ ...current, codex: message }));
       }
+      setErrorMessages((current) => ({ ...current, codex: message }));
       setLoginStatus(message);
     } finally {
       codexRefreshInFlightRef.current = false;
       setIsRefreshing(false);
     }
-  }, [rememberProviderConnection]);
+  }, [rememberProviderConnection, snapshots.codex]);
 
   const refreshProvider = useCallback((provider: UsageProvider) => {
     if (requestIdRef.current) return;
@@ -299,7 +345,7 @@ export function UsageDashboard() {
     if (!isWebReadyRef.current || !webViewRef.current) {
       pendingRefreshRef.current = true;
       if (isShowingLogin && webViewRef.current) {
-        setLoginStatus(`Återgår till ${PROVIDER_META[provider].label} och kontrollerar sessionen…`);
+        setLoginStatus(`Kontrollerar inloggningen hos ${PROVIDER_META[provider].label}…`);
         setWebSourceURL(PROVIDER_META[provider].homeURL);
       }
       return;
@@ -309,7 +355,6 @@ export function UsageDashboard() {
     const requestId = `${Date.now()}-${Math.random()}`;
     requestIdRef.current = requestId;
     requestProviderRef.current = provider;
-    requestStartedAtRef.current = Date.now();
     pendingRefreshRef.current = false;
     setIsRefreshing(true);
     setErrorMessages((current) => ({ ...current, [provider]: null }));
@@ -321,25 +366,31 @@ export function UsageDashboard() {
       requestIdRef.current = null;
       requestProviderRef.current = null;
       setIsRefreshing(false);
-      const message = `${PROVIDER_META[provider].label} svarade inte inom 15 sekunder.`;
+      const message = friendlyTimeout(provider, Boolean(snapshots[provider]));
       setErrorMessages((current) => ({ ...current, [provider]: message }));
       if (isShowingLogin) setLoginStatus(message);
     }, 15_000);
-  }, [clearRequestTimeout, isShowingLogin, refreshCodexProvider]);
+  }, [clearRequestTimeout, isShowingLogin, refreshCodexProvider, snapshots]);
 
   useEffect(() => {
     let cancelled = false;
 
-    void AsyncStorage.getItem(CONNECTION_STORAGE_KEY)
-      .then((storedValue) => {
-        if (cancelled || !storedValue) return;
-        const stored = JSON.parse(storedValue) as Partial<ProviderRecord<boolean>>;
-        const connected: ProviderRecord<boolean> = {
-          claude: stored.claude === true,
-          codex: stored.codex === true,
-        };
-        connectedProvidersRef.current = connected;
-        setNeedsSignInByProvider({ claude: !connected.claude, codex: !connected.codex });
+    void AsyncStorage.multiGet([CONNECTION_STORAGE_KEY, LAST_PROVIDER_STORAGE_KEY, REFRESH_HINT_STORAGE_KEY])
+      .then((entries) => {
+        if (cancelled) return;
+        const storedValue = entries[0][1];
+        if (storedValue) {
+          const stored = JSON.parse(storedValue) as Partial<ProviderRecord<boolean>>;
+          const connected: ProviderRecord<boolean> = {
+            claude: stored.claude === true,
+            codex: stored.codex === true,
+          };
+          connectedProvidersRef.current = connected;
+          setNeedsSignInByProvider({ claude: !connected.claude, codex: !connected.codex });
+        }
+        const storedProvider = entries[1][1];
+        if (storedProvider === 'claude' || storedProvider === 'codex') setActiveProvider(storedProvider);
+        setShowRefreshHint(entries[2][1] !== 'true');
       })
       .catch(() => {
         if (cancelled) return;
@@ -356,9 +407,16 @@ export function UsageDashboard() {
     };
   }, []);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((silent = false) => {
+    if (!silent) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (showRefreshHint) {
+        setShowRefreshHint(false);
+        void AsyncStorage.setItem(REFRESH_HINT_STORAGE_KEY, 'true');
+      }
+    }
     refreshProvider(activeProvider);
-  }, [activeProvider, refreshProvider]);
+  }, [activeProvider, refreshProvider, showRefreshHint]);
 
   useEffect(() => {
     if (!connectionsHydrated) return;
@@ -388,7 +446,7 @@ export function UsageDashboard() {
       const now = Date.now();
       if (now - lastRefreshAttemptAtRef.current[activeProvider] < AUTO_REFRESH_INTERVAL_MS) return;
 
-      refresh();
+      refresh(true);
     };
 
     const interval = setInterval(refreshIfDue, AUTO_REFRESH_INTERVAL_MS);
@@ -410,12 +468,20 @@ export function UsageDashboard() {
       isWebReadyRef.current = isReady;
       if (!isReady) {
         if (event.nativeEvent.url === 'about:blank' && isShowingLogin) {
-          setLoginStatus(`Inloggningen stängdes. Tryck Klar för att fortsätta till ${PROVIDER_META[expectedProvider].label}.`);
+          setLoginStatus(`Inloggningen stängdes. Försök igen för att ansluta ${PROVIDER_META[expectedProvider].label}.`);
         }
         return;
       }
 
-      setLoginStatus('Sidan är laddad. Logga in med e-post och tryck sedan Klar.');
+      if (isDisconnectingClaudeRef.current) {
+        setLoginStatus('Öppna profilmenyn i Claude och välj Log out.');
+        if (isClaudeLoginURL(event.nativeEvent.url)) {
+          setTimeout(() => refreshProvider(expectedProvider), 350);
+        }
+        return;
+      }
+
+      setLoginStatus('Logga in med e-post eller Apple. Vi fortsätter automatiskt.');
       if (pendingRefreshRef.current || isShowingLogin) {
         setTimeout(() => refreshProvider(expectedProvider), 350);
       }
@@ -441,6 +507,14 @@ export function UsageDashboard() {
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
+      try {
+        const raw = JSON.parse(event.nativeEvent.data) as { type?: string };
+        if (raw.type === 'google-login-blocked') {
+          setLoginStatus(GOOGLE_LOGIN_UNAVAILABLE);
+          void AccessibilityInfo.announceForAccessibility(GOOGLE_LOGIN_UNAVAILABLE);
+          return;
+        }
+      } catch {}
       const provider = requestProviderRef.current;
       if (provider !== 'claude') return;
 
@@ -454,9 +528,22 @@ export function UsageDashboard() {
 
       if (message.type === 'auth-required') {
         rememberProviderConnection(provider, false);
-        setSnapshots((current) => ({ ...current, [provider]: null }));
+        if (isDisconnectingClaudeRef.current) {
+          isDisconnectingClaudeRef.current = false;
+          setSnapshots((current) => ({ ...current, claude: null }));
+          setErrorMessages((current) => ({ ...current, claude: null }));
+          setNeedsSignInByProvider((current) => ({ ...current, claude: true }));
+          setIsShowingLogin(false);
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          void AccessibilityInfo.announceForAccessibility('Claude har kopplats från.');
+          return;
+        }
         setNeedsSignInByProvider((current) => ({ ...current, [provider]: true }));
-        setLoginStatus(`Inte inloggad ännu. Logga in på ${PROVIDER_META[provider].label}.`);
+        const text = snapshots[provider]
+          ? `Logga in igen för att uppdatera. Senast hämtade värde visas.`
+          : `Logga in på ${PROVIDER_META[provider].label} för att se dina gränser.`;
+        setErrorMessages((current) => ({ ...current, [provider]: text }));
+        setLoginStatus(text);
         return;
       }
 
@@ -474,7 +561,9 @@ export function UsageDashboard() {
       }
 
       if (message.status !== 200) {
-        const text = `${PROVIDER_META[provider].label} returnerade HTTP ${message.status}.`;
+        const text = snapshots[provider]
+          ? 'Kunde inte uppdatera just nu. Senast hämtade värde visas.'
+          : `${PROVIDER_META[provider].label} kunde inte nås. Försök igen om en stund.`;
         setErrorMessages((current) => ({ ...current, [provider]: text }));
         setLoginStatus(text);
         return;
@@ -482,22 +571,24 @@ export function UsageDashboard() {
 
       try {
         const nextSnapshot = parseUsagePayload(message.body);
-        const duration = (Date.now() - requestStartedAtRef.current) / 1000;
         setSnapshots((current) => ({ ...current, [provider]: nextSnapshot }));
-        setLastRefreshDurations((current) => ({ ...current, [provider]: duration }));
         rememberProviderConnection(provider, true);
         setNeedsSignInByProvider((current) => ({ ...current, [provider]: false }));
         setErrorMessages((current) => ({ ...current, [provider]: null }));
         setLoginStatus(`Klart — ${PROVIDER_META[provider].label}-kontot är anslutet.`);
+        if (isShowingLogin) {
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          void AccessibilityInfo.announceForAccessibility(`${PROVIDER_META[provider].label} är anslutet.`);
+        }
         setWebSourceURL(PROVIDER_META[provider].homeURL);
         setIsShowingLogin(false);
       } catch (error) {
-        const text = error instanceof Error ? error.message : 'Usage-datan kunde inte läsas.';
+        const text = friendlyError(error, provider, Boolean(snapshots[provider]));
         setErrorMessages((current) => ({ ...current, [provider]: text }));
         setLoginStatus(text);
       }
     },
-    [clearRequestTimeout, rememberProviderConnection],
+    [clearRequestTimeout, isShowingLogin, rememberProviderConnection, snapshots],
   );
 
   const openCodexDevicePage = useCallback((authorization = codexLogin?.authorization) => {
@@ -517,7 +608,6 @@ export function UsageDashboard() {
     const generation = codexLoginGenerationRef.current + 1;
     codexLoginGenerationRef.current = generation;
     setCodexLogin({ authorization: null, errorMessage: null, phase: 'starting' });
-    setSnapshots((current) => ({ ...current, codex: null }));
     setLoginStatus('Skapar en säker engångskod hos OpenAI…');
     setIsShowingLogin(true);
 
@@ -526,6 +616,7 @@ export function UsageDashboard() {
       if (codexLoginGenerationRef.current !== generation) return;
 
       setIsCodexCodeCopied(false);
+      setNow(Date.now());
       setCodexLogin({ authorization, errorMessage: null, phase: 'waiting' });
       setLoginStatus('Engångskoden är klar. Kopiera den och öppna sedan OpenAI.');
 
@@ -543,6 +634,8 @@ export function UsageDashboard() {
           setNeedsSignInByProvider((current) => ({ ...current, codex: false }));
           setCodexLogin(null);
           setIsShowingLogin(false);
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          void AccessibilityInfo.announceForAccessibility('Codex är anslutet.');
           await refreshCodexProvider();
           return;
         }
@@ -559,6 +652,7 @@ export function UsageDashboard() {
         phase: 'error',
       }));
       setLoginStatus(message);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   }, [refreshCodexProvider, rememberProviderConnection]);
 
@@ -570,27 +664,33 @@ export function UsageDashboard() {
     setLoginStatus('Koden är kopierad. Öppna OpenAI och klistra in den.');
   }, [codexLogin?.authorization?.userCode]);
 
+  const copyCodeAndOpenCodex = useCallback(async () => {
+    await copyCodexCode();
+    openCodexDevicePage();
+  }, [copyCodexCode, openCodexDevicePage]);
+
   const showLogin = useCallback(() => {
+    isDisconnectingClaudeRef.current = false;
     clearRequestTimeout();
     requestIdRef.current = null;
     requestProviderRef.current = null;
     if (activeProvider === 'codex') {
-      setCodexLogin({ authorization: null, errorMessage: null, phase: 'prerequisite' });
-      setLoginStatus('Första gången: tillåt enhetskod för Codex i ChatGPT.');
       setIsShowingLogin(true);
+      void startCodexLogin();
       return;
     }
     setLoginStatus(
-      'Logga in med e-post eller Apple. Sessionen sparas på enheten.',
+      'Logga in med e-post eller Apple. Inloggningen sparas på enheten.',
     );
     webViewProviderRef.current = activeProvider;
     isWebReadyRef.current = false;
     pendingRefreshRef.current = true;
     setIsShowingLogin(true);
     setWebSourceURL(PROVIDER_META[activeProvider].loginURL);
-  }, [activeProvider, clearRequestTimeout]);
+  }, [activeProvider, clearRequestTimeout, startCodexLogin]);
 
   const dismissLogin = useCallback(() => {
+    isDisconnectingClaudeRef.current = false;
     if (activeProvider === 'codex') {
       codexLoginGenerationRef.current += 1;
       setCodexLogin(null);
@@ -614,30 +714,108 @@ export function UsageDashboard() {
     if (provider === 'claude') webViewProviderRef.current = provider;
     setIsRefreshing(false);
     setIsShowingLogin(false);
+    if (isMonitorMode) {
+      setIsMonitorMode(false);
+      void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    }
     setActiveProvider(provider);
+    void AsyncStorage.setItem(LAST_PROVIDER_STORAGE_KEY, provider);
+    void Haptics.selectionAsync();
     setNeedsSignInByProvider((current) => ({ ...current, [provider]: !connectedProvidersRef.current[provider] }));
     setLoginStatus(`Laddar ${PROVIDER_META[provider].label}…`);
     if (provider === 'claude') setWebSourceURL(PROVIDER_META[provider].homeURL);
-  }, [activeProvider, clearRequestTimeout]);
+  }, [activeProvider, clearRequestTimeout, isMonitorMode]);
 
-  const shareObservation = useCallback(async () => {
-    if (!snapshot || lastRefreshDuration === null) return;
-    await Share.share({ message: createExperimentReport(snapshot, lastRefreshDuration) });
-  }, [lastRefreshDuration, snapshot]);
+  const showAccount = useCallback(() => {
+    setIsShowingAccount(true);
+    void Haptics.selectionAsync();
+  }, []);
+
+  const disconnectProvider = useCallback(() => {
+    const label = PROVIDER_META[activeProvider].label;
+    Alert.alert(
+      `Koppla från ${label}?`,
+      'Sparad inloggning och visade gränser tas bort från den här enheten.',
+      [
+        { text: 'Avbryt', style: 'cancel' },
+        {
+          text: 'Koppla från',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                if (activeProvider === 'codex') {
+                  await clearCodexAuth();
+                } else {
+                  try {
+                    const { default: CookieManager } = await import('@preeternal/react-native-cookie-manager');
+                    await CookieManager.clearAll(true);
+                  } catch {
+                    isDisconnectingClaudeRef.current = true;
+                    setIsShowingAccount(false);
+                    setLoginStatus('Öppna profilmenyn i Claude och välj Log out. Appen upptäcker det automatiskt.');
+                    setWebSourceURL(CLAUDE_HOME_URL);
+                    setIsShowingLogin(true);
+                    return;
+                  }
+                }
+                rememberProviderConnection(activeProvider, false);
+                setSnapshots((current) => ({ ...current, [activeProvider]: null }));
+                setErrorMessages((current) => ({ ...current, [activeProvider]: null }));
+                setNeedsSignInByProvider((current) => ({ ...current, [activeProvider]: true }));
+                setIsShowingAccount(false);
+                if (activeProvider === 'claude') setTransportKey((value) => value + 1);
+                void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                void AccessibilityInfo.announceForAccessibility(`${label} har kopplats från.`);
+              } catch {
+                Alert.alert('Kunde inte koppla från', 'Försök igen om en stund.');
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }, [activeProvider, rememberProviderConnection]);
+
+  const enterMonitorMode = useCallback(async () => {
+    if (!snapshot) return;
+    setIsMonitorMode(true);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
+  }, [snapshot]);
+
+  const exitMonitorMode = useCallback(async () => {
+    setIsMonitorMode(false);
+    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+  }, []);
 
   const primaryWindow = snapshot?.windows.find((window) => window.id === 'five-hour') ?? snapshot?.windows[0] ?? null;
   const secondaryWindows = snapshot?.windows.filter((window) => window.id !== primaryWindow?.id) ?? [];
-  const isMonitorMode = width > height && Boolean(snapshot && primaryWindow) && !isShowingLogin;
-  const isSignedOutLandscape = width > height && !snapshot && !isShowingLogin;
 
   return (
     <View style={[styles.root, isMonitorMode && styles.monitorRoot]}>
+      <WebView
+        key={`claude-transport-${transportKey}`}
+        ref={webViewRef}
+        source={{ uri: CLAUDE_HOME_URL }}
+        style={styles.hiddenTransport}
+        pointerEvents="none"
+        javaScriptEnabled
+        domStorageEnabled
+        sharedCookiesEnabled
+        thirdPartyCookiesEnabled
+        userAgent={SAFARI_USER_AGENT}
+        onLoadEnd={handleLoadEnd}
+        onMessage={handleMessage}
+        onNavigationStateChange={handleNavigationChange}
+      />
       <StatusBar hidden={isMonitorMode} style={isMonitorMode ? 'light' : 'auto'} />
       {isMonitorMode && snapshot && primaryWindow ? (
         <LandscapeMonitor
           activeProvider={activeProvider}
           isRefreshing={isRefreshing}
-          onRefresh={refresh}
+          onExit={exitMonitorMode}
+          onRefresh={() => refresh()}
           onSelectProvider={selectProvider}
           primaryWindow={primaryWindow}
           providerAccentInk={providerTheme.monitorAccentInk}
@@ -650,25 +828,25 @@ export function UsageDashboard() {
         <ScrollView
           contentContainerStyle={[
             styles.content,
-            isSignedOutLandscape && styles.signedOutLandscapeContent,
             { paddingBottom: Math.max(32, insets.bottom + 20) },
           ]}
-          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={refresh} tintColor={palette.accent} />}>
+          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => refresh()} tintColor={palette.accent} />}>
+          <Animated.View style={[styles.screenContent, { opacity: contentOpacity }]}>
           <View style={styles.header}>
             <View>
-              <Text style={styles.title}>Usage</Text>
+              <Text style={styles.title}>Kapacitet</Text>
               <View style={styles.connectionRow}>
-                <View style={[styles.statusDot, { backgroundColor: snapshot ? palette.success : palette.secondary }]} />
+                <View style={[styles.statusDot, { backgroundColor: needsSignIn ? palette.danger : errorMessage ? palette.accent : snapshot ? palette.success : palette.secondary }]} />
                 <Text style={styles.connectionText}>
-                  {`${PROVIDER_META[activeProvider].label} · ${snapshot ? 'anslutet' : needsSignIn ? 'inloggning krävs' : 'hämtar usage'}`}
+                  {`${PROVIDER_META[activeProvider].label} · ${needsSignIn ? 'inloggning krävs' : errorMessage && snapshot ? 'senast hämtat' : snapshot ? 'anslutet' : 'hämtar gränser'}`}
                 </Text>
               </View>
             </View>
-            {snapshot ? (
+            {snapshot && !needsSignIn ? (
               <Pressable
                 accessibilityLabel={`Hantera ${PROVIDER_META[activeProvider].label}-inloggning`}
                 accessibilityRole="button"
-                onPress={showLogin}
+                onPress={showAccount}
                 style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}>
                 <Ionicons name="person-circle-outline" size={19} color={palette.ink} />
                 <Text style={styles.accountButtonText}>Konto</Text>
@@ -710,16 +888,14 @@ export function UsageDashboard() {
                     <View style={[styles.statusDot, { backgroundColor: palette.success }]} />
                     <Text style={styles.freshnessTitle}>{`Uppdaterad ${formatRelativeTime(snapshot.fetchedAt)}`}</Text>
                   </View>
-                  {lastRefreshDuration !== null ? (
-                    <Text style={styles.caption}>{`Direkt från ${PROVIDER_META[activeProvider].label} · ${lastRefreshDuration.toFixed(2)} s`}</Text>
-                  ) : null}
+                  <Text style={styles.caption}>{`Direkt från ${PROVIDER_META[activeProvider].label}`}</Text>
                 </View>
                 <Pressable
-                  accessibilityLabel="Uppdatera usage"
+                  accessibilityLabel="Uppdatera gränser"
                   accessibilityRole="button"
                   accessibilityState={{ disabled: isRefreshing, busy: isRefreshing }}
                   disabled={isRefreshing}
-                  onPress={refresh}
+                  onPress={() => refresh()}
                   style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
                   {isRefreshing ? (
                     <ActivityIndicator size="small" color={palette.ink} />
@@ -728,53 +904,51 @@ export function UsageDashboard() {
                   )}
                 </Pressable>
               </View>
+              {showRefreshHint ? <Text style={styles.refreshHint}>Tips: Dra nedåt för att uppdatera.</Text> : null}
 
               <View style={styles.utilityRow}>
-                <View style={styles.privacyInline}>
-                  <Ionicons name="shield-checkmark-outline" size={18} color={palette.secondary} />
-                  <Text style={styles.privacyText}>Inloggning och usage stannar i appen på enheten.</Text>
-                </View>
                 <Pressable
-                  accessibilityLabel="Dela usage"
+                  accessibilityLabel="Öppna liggande monitor"
                   accessibilityRole="button"
-                  onPress={shareObservation}
-                  style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]}>
-                  <Ionicons name="share-outline" size={20} color={palette.ink} />
+                  onPress={() => void enterMonitorMode()}
+                  style={({ pressed }) => [styles.monitorButton, pressed && styles.pressed]}>
+                  <AppSymbol fallback="phone-landscape-outline" name="rectangle" size={19} color={palette.ink} />
+                  <Text style={styles.monitorButtonText}>Öppna monitor</Text>
                 </Pressable>
               </View>
             </View>
           ) : (
-            <View style={[styles.signInPanel, isSignedOutLandscape && styles.signInPanelLandscape]}>
-              <View style={[styles.signInIntro, isSignedOutLandscape && styles.signInIntroLandscape]}>
+            <View style={styles.signInPanel}>
+              <View style={styles.signInIntro}>
                 <View style={styles.signInIcon}>
                   <Ionicons name={errorMessage ? 'cloud-offline-outline' : 'person-outline'} size={32} color={palette.accent} />
                 </View>
                 <View style={styles.signInCopy}>
                   <Text style={styles.signInTitle}>
                     {errorMessage
-                      ? 'Usage kunde inte hämtas'
+                      ? 'Gränserna kunde inte hämtas'
                       : needsSignIn
                         ? `Logga in på ${PROVIDER_META[activeProvider].label}`
-                        : `Hämtar ${PROVIDER_META[activeProvider].label} usage`}
+                        : `Hämtar gränser från ${PROVIDER_META[activeProvider].label}`}
                   </Text>
                   <Text style={styles.signInText}>
                     {errorMessage
-                      ? 'Kontrollera anslutningen och försök igen. Om sessionen har löpt ut får du logga in på nytt.'
+                      ? 'Kontrollera internet och försök igen. Om inloggningen har gått ut hjälper appen dig att ansluta på nytt.'
                       : needsSignIn
                         ? activeProvider === 'codex'
                           ? 'Anslut ditt OpenAI-konto för att se aktuella Codex-gränser och återställningstider.'
                           : 'Anslut ditt Claude-konto för att se aktuella gränser och återställningstider.'
-                        : 'Din sparade session kontrolleras. Det tar vanligtvis bara några sekunder.'}
+                        : 'Din sparade inloggning kontrolleras. Det tar vanligtvis bara några sekunder.'}
                   </Text>
                 </View>
               </View>
 
-              <View style={[styles.signInActions, isSignedOutLandscape && styles.signInActionsLandscape]}>
+              <View style={styles.signInActions}>
                 {needsSignIn || errorMessage ? (
                   <Pressable
-                    accessibilityLabel={errorMessage && !needsSignIn ? 'Försök hämta usage igen' : `Logga in på ${PROVIDER_META[activeProvider].label}`}
+                    accessibilityLabel={errorMessage && !needsSignIn ? 'Försök hämta gränser igen' : `Logga in på ${PROVIDER_META[activeProvider].label}`}
                     accessibilityRole="button"
-                    onPress={errorMessage && !needsSignIn ? refresh : showLogin}
+                    onPress={errorMessage && !needsSignIn ? () => refresh() : showLogin}
                     style={({ pressed }) => [styles.signInButton, pressed && styles.pressed]}>
                     <Text style={styles.signInButtonText}>
                       {errorMessage && !needsSignIn
@@ -786,18 +960,18 @@ export function UsageDashboard() {
                 ) : (
                   <View style={styles.checkingRow}>
                     <ActivityIndicator color={palette.accent} />
-                    <Text style={styles.checkingText}>Kontrollerar sparad session…</Text>
+                    <Text style={styles.checkingText}>Kontrollerar sparad inloggning…</Text>
                   </View>
                 )}
 
-                <View style={[styles.signInAssurances, isSignedOutLandscape && styles.signInAssurancesLandscape]}>
+                <View style={styles.signInAssurances}>
                   <View style={styles.assuranceRow}>
                     <Ionicons name="key-outline" size={19} color={palette.accent} />
                     <Text style={styles.assuranceText}>Du behöver normalt bara logga in en gång.</Text>
                   </View>
                   <View style={styles.assuranceRow}>
                     <Ionicons name="shield-checkmark-outline" size={19} color={palette.accent} />
-                    <Text style={styles.assuranceText}>Session och usage stannar på din iPhone.</Text>
+                    <Text style={styles.assuranceText}>Din inloggning och dina gränser stannar på din iPhone.</Text>
                   </View>
                 </View>
               </View>
@@ -805,38 +979,43 @@ export function UsageDashboard() {
           )}
 
           {errorMessage && snapshot ? (
-            <View style={styles.errorCard}>
+            <View accessibilityLiveRegion="polite" style={styles.errorCard}>
               <Ionicons name="warning" size={18} color={palette.danger} />
-              <Text style={styles.errorText}>{errorMessage}</Text>
+              <View style={styles.errorBody}>
+                <Text style={styles.errorText}>{errorMessage}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={needsSignIn ? showLogin : () => refresh()}
+                  style={({ pressed }) => [styles.errorAction, pressed && styles.pressed]}>
+                  <Text style={styles.errorActionText}>{needsSignIn ? 'Logga in igen' : 'Försök igen'}</Text>
+                </Pressable>
+              </View>
             </View>
           ) : null}
+          </Animated.View>
         </ScrollView>
         </SafeAreaView>
       )}
 
-      <View
-        pointerEvents={isShowingLogin ? 'auto' : 'none'}
-        style={isShowingLogin ? styles.loginOverlayVisible : styles.loginOverlayHidden}>
-        <SafeAreaView style={styles.loginSafeArea} edges={['top', 'bottom', 'left', 'right']}>
+      <Modal
+        animationType="slide"
+        onRequestClose={dismissLogin}
+        presentationStyle="pageSheet"
+        visible={isShowingLogin}>
+        <SafeAreaView accessibilityViewIsModal style={styles.loginSafeArea} edges={['top', 'bottom', 'left', 'right']}>
           <View style={styles.loginHeader}>
-            <Pressable accessibilityRole="button" onPress={dismissLogin} hitSlop={12}>
+            <Pressable accessibilityLabel="Stäng inloggningen" accessibilityRole="button" onPress={dismissLogin} hitSlop={12} style={styles.headerActionHitbox}>
               <Text style={styles.loginAction}>Avbryt</Text>
             </Pressable>
             <Text style={styles.loginTitle}>
               {activeProvider === 'codex' ? 'Anslut Codex' : 'Logga in på Claude'}
             </Text>
-            {activeProvider === 'codex' ? (
-              <View style={styles.loginHeaderSpacer} />
-            ) : (
-              <Pressable accessibilityRole="button" onPress={refresh} hitSlop={12}>
-                <Text style={styles.loginAction}>Klar</Text>
-              </Pressable>
-            )}
+            <View style={styles.loginHeaderSpacer} />
           </View>
-          <View style={styles.loginHint}>
+          <View accessibilityLiveRegion="polite" style={styles.loginHint}>
             {isRefreshing || codexLogin?.phase === 'starting' || codexLogin?.phase === 'finishing'
               ? <ActivityIndicator size="small" color={palette.accent} />
-              : <Ionicons name={activeProvider === 'codex' ? 'key-outline' : 'mail-outline'} size={18} color={palette.accent} />}
+              : <AppSymbol fallback={activeProvider === 'codex' ? 'key-outline' : 'mail-outline'} name={activeProvider === 'codex' ? 'key' : 'envelope'} size={18} color={palette.accent} />}
             <Text style={styles.loginHintText}>{loginStatus}</Text>
           </View>
           {activeProvider === 'codex' ? (
@@ -845,71 +1024,32 @@ export function UsageDashboard() {
               contentContainerStyle={styles.deviceLoginPanel}
               showsVerticalScrollIndicator={false}>
               <View style={styles.deviceLoginIcon}>
-                <Ionicons name="shield-checkmark-outline" size={34} color={palette.accent} />
+                <AppSymbol fallback="shield-checkmark-outline" name="checkmark.shield" size={34} color={palette.accent} />
               </View>
-              <Text style={styles.deviceLoginTitle}>
-                {codexLogin?.phase === 'prerequisite' ? 'Tillåt Codex-inloggning' : 'Logga in säkert i Safari'}
+              <Text style={styles.deviceLoginTitle}>Logga in säkert hos OpenAI</Text>
+              <Text style={styles.deviceLoginText}>
+                Du lämnar appen en kort stund. När du har godkänt återgår du hit och anslutningen slutförs automatiskt.
               </Text>
-              {codexLogin?.phase === 'prerequisite' ? (
-                <>
-                  <Text style={styles.deviceLoginText}>
-                    OpenAI har enhetskoder avstängda som standard. Slå på dem en gång innan du ansluter appen.
-                  </Text>
-                  <View style={styles.deviceSteps}>
-                    <View style={styles.deviceStep}>
-                      <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>1</Text></View>
-                      <Text style={styles.deviceStepText}>Öppna ChatGPT:s säkerhetsinställningar.</Text>
-                    </View>
-                    <View style={styles.deviceStep}>
-                      <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>2</Text></View>
-                      <Text style={styles.deviceStepText}>Slå på “Enable device code authorization for Codex”.</Text>
-                    </View>
-                    <View style={styles.deviceStep}>
-                      <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>3</Text></View>
-                      <Text style={styles.deviceStepText}>Gå tillbaka hit och skapa engångskoden.</Text>
-                    </View>
-                  </View>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={openCodexSecuritySettings}
-                    style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
-                    <Text style={styles.deviceLoginButtonText}>Öppna säkerhetsinställningar</Text>
-                    <Ionicons name="open-outline" size={19} color={palette.accentInk} />
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => void startCodexLogin()}
-                    style={({ pressed }) => [styles.deviceLoginSecondaryButton, pressed && styles.pressed]}>
-                    <Text style={styles.deviceLoginSecondaryButtonText}>Klart — skapa engångskod</Text>
-                  </Pressable>
-                  <Text style={styles.deviceLoginFootnote}>
-                    Har du ett arbetskonto kan administratören behöva tillåta inställningen för arbetsytan.
-                  </Text>
-                </>
-              ) : codexLogin?.authorization ? (
-                <Text style={styles.deviceLoginText}>
-                  Följ stegen nedan. Koden fungerar med Google, Apple eller e-post och löper ut efter 15 minuter.
-                </Text>
-              ) : null}
 
               {codexLogin?.authorization ? (
                 <>
                   <View style={styles.deviceCodeBlock}>
                     <Text style={styles.deviceCodeLabel}>DIN ENGÅNGSKOD</Text>
                     <Text selectable style={styles.deviceCode}>{codexLogin.authorization.userCode}</Text>
+                    <Text style={styles.deviceCodeCountdown}>{formatCountdown(codexLogin.authorization.expiresAt, now)}</Text>
                   </View>
                   <View style={styles.deviceSteps}>
                     <View style={styles.deviceStep}>
                       <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>1</Text></View>
-                      <Text style={styles.deviceStepText}>Kopiera engångskoden med knappen nedan.</Text>
+                      <Text style={styles.deviceStepText}>Kopiera koden och öppna OpenAI.</Text>
                     </View>
                     <View style={styles.deviceStep}>
                       <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>2</Text></View>
-                      <Text style={styles.deviceStepText}>Öppna OpenAI i Safari och klistra in koden.</Text>
+                      <Text style={styles.deviceStepText}>Klistra in koden och godkänn.</Text>
                     </View>
                     <View style={styles.deviceStep}>
                       <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>3</Text></View>
-                      <Text style={styles.deviceStepText}>Godkänn och gå tillbaka hit. Anslutningen slutförs automatiskt.</Text>
+                      <Text style={styles.deviceStepText}>Gå tillbaka hit. Resten sker automatiskt.</Text>
                     </View>
                   </View>
                 </>
@@ -918,41 +1058,39 @@ export function UsageDashboard() {
               {codexLogin?.phase === 'starting' || codexLogin?.phase === 'finishing' ? (
                 <ActivityIndicator size="large" color={palette.accent} />
               ) : codexLogin?.phase === 'error' ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => void startCodexLogin()}
-                  style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
-                  <Text style={styles.deviceLoginButtonText}>Skapa en ny kod</Text>
-                  <Ionicons name="refresh" size={19} color={palette.accentInk} />
-                </Pressable>
-              ) : codexLogin?.authorization ? (
                 <View style={styles.deviceActionStack}>
                   <Pressable
-                    accessibilityLabel="Kopiera engångskoden"
                     accessibilityRole="button"
-                    onPress={() => void copyCodexCode()}
+                    onPress={() => void startCodexLogin()}
                     style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
-                    <Text style={styles.deviceLoginButtonText}>{isCodexCodeCopied ? 'Kopierad' : 'Kopiera engångskod'}</Text>
-                    <Ionicons name={isCodexCodeCopied ? 'checkmark' : 'copy-outline'} size={19} color={palette.accentInk} />
+                    <Text style={styles.deviceLoginButtonText}>Försök igen</Text>
+                    <AppSymbol fallback="refresh" name="arrow.clockwise" size={19} color={palette.accentInk} />
                   </Pressable>
                   <Pressable
-                    accessibilityLabel="Öppna OpenAI i Safari"
                     accessibilityRole="button"
-                    onPress={() => openCodexDevicePage()}
+                    onPress={openCodexSecuritySettings}
                     style={({ pressed }) => [styles.deviceLoginSecondaryButton, pressed && styles.pressed]}>
-                    <Text style={styles.deviceLoginSecondaryButtonText}>Öppna OpenAI i Safari</Text>
-                    <Ionicons name="open-outline" size={19} color={palette.ink} />
+                    <Text style={styles.deviceLoginSecondaryButtonText}>Kontrollera OpenAI-inställning</Text>
                   </Pressable>
                 </View>
+              ) : codexLogin?.authorization ? (
+                <Pressable
+                  accessibilityLabel="Kopiera engångskoden och öppna OpenAI"
+                  accessibilityRole="button"
+                  onPress={() => void copyCodeAndOpenCodex()}
+                  style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
+                  <Text style={styles.deviceLoginButtonText}>{isCodexCodeCopied ? 'Öppna OpenAI igen' : 'Kopiera kod och öppna OpenAI'}</Text>
+                  <AppSymbol fallback="open-outline" name="arrow.up.forward.app" size={19} color={palette.accentInk} />
+                </Pressable>
               ) : null}
 
               {codexLogin?.errorMessage ? <Text style={styles.deviceLoginError}>{codexLogin.errorMessage}</Text> : null}
-              <Text style={styles.deviceLoginPrivacy}>Token sparas i iOS Keychain och usage hämtas direkt från OpenAI.</Text>
+              <Text style={styles.deviceLoginPrivacy}>Inloggningen sparas säkert i iOS-nyckelringen på den här enheten.</Text>
             </ScrollView>
           ) : (
             <View style={styles.webViewHost}>
               <WebView
-                ref={webViewRef}
+                ref={loginWebViewRef}
                 source={{ uri: webSourceURL }}
                 style={styles.webView}
                 javaScriptEnabled
@@ -960,8 +1098,9 @@ export function UsageDashboard() {
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
                 javaScriptCanOpenWindowsAutomatically
-                setSupportMultipleWindows
+                setSupportMultipleWindows={false}
                 userAgent={SAFARI_USER_AGENT}
+                injectedJavaScriptBeforeContentLoaded={CLAUDE_LOGIN_GUARD_SCRIPT}
                 onLoadEnd={handleLoadEnd}
                 onMessage={handleMessage}
                 onNavigationStateChange={handleNavigationChange}
@@ -972,12 +1111,64 @@ export function UsageDashboard() {
             </View>
           )}
         </SafeAreaView>
-      </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIsShowingAccount(false)}
+        presentationStyle="pageSheet"
+        visible={isShowingAccount}>
+        <SafeAreaView accessibilityViewIsModal style={styles.accountSheet} edges={['top', 'bottom', 'left', 'right']}>
+          <View style={styles.loginHeader}>
+            <View style={styles.loginHeaderSpacer} />
+            <Text style={styles.loginTitle}>Konto</Text>
+            <Pressable accessibilityLabel="Stäng konto" accessibilityRole="button" hitSlop={12} onPress={() => setIsShowingAccount(false)} style={styles.headerActionHitbox}>
+              <Text style={[styles.loginAction, styles.loginActionRight]}>Stäng</Text>
+            </Pressable>
+          </View>
+          <View style={styles.accountContent}>
+            <View style={styles.accountIcon}>
+              <AppSymbol fallback="person-outline" name="person.crop.circle.fill" size={44} color={palette.accent} />
+            </View>
+            <Text style={styles.accountTitle}>{PROVIDER_META[activeProvider].label} är anslutet</Text>
+            <Text style={styles.accountText}>Appen använder den sparade inloggningen för att hämta dina gränser. Inga lösenord sparas i appen.</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={disconnectProvider}
+              style={({ pressed }) => [styles.disconnectButton, pressed && styles.pressed]}>
+              <AppSymbol fallback="log-out-outline" name="rectangle.portrait.and.arrow.right" size={19} color={palette.danger} />
+              <Text style={styles.disconnectButtonText}>Koppla från {PROVIDER_META[activeProvider].label}</Text>
+            </Pressable>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }
 
 type DashboardStyles = ReturnType<typeof createStyles>;
+
+function AppSymbol({
+  color,
+  fallback,
+  name,
+  size,
+}: {
+  color: string;
+  fallback: IoniconName;
+  name: IOSSymbolName;
+  size: number;
+}) {
+  return (
+    <SymbolView
+      fallback={<Ionicons color={color} name={fallback} size={size} />}
+      name={{ ios: name }}
+      size={size}
+      tintColor={color}
+      weight="semibold"
+    />
+  );
+}
 
 function ProviderSwitcher({
   activeProvider,
@@ -997,7 +1188,7 @@ function ProviderSwitcher({
         return (
           <Pressable
             key={provider}
-            accessibilityLabel={`Visa ${PROVIDER_META[provider].label} usage`}
+            accessibilityLabel={`Visa gränser för ${PROVIDER_META[provider].label}`}
             accessibilityRole="button"
             accessibilityState={{ selected }}
             onPress={() => onSelectProvider(provider)}
@@ -1023,6 +1214,7 @@ function ProviderSwitcher({
 function LandscapeMonitor({
   activeProvider,
   isRefreshing,
+  onExit,
   onRefresh,
   onSelectProvider,
   primaryWindow,
@@ -1033,6 +1225,7 @@ function LandscapeMonitor({
 }: {
   activeProvider: UsageProvider;
   isRefreshing: boolean;
+  onExit: () => void;
   onRefresh: () => void;
   onSelectProvider: (provider: UsageProvider) => void;
   primaryWindow: UsageWindow;
@@ -1051,7 +1244,7 @@ function LandscapeMonitor({
       <View style={styles.monitorShell}>
         <View style={styles.monitorHeader}>
           <View style={styles.monitorIdentity}>
-            <Text style={styles.monitorBrand}>Usage</Text>
+            <Text style={styles.monitorBrand}>Kapacitet</Text>
             <View style={styles.monitorConnection}>
               <View style={[styles.monitorStatusDot, styles.monitorLiveDot]} />
               <Text style={styles.monitorConnectionText}>{`${PROVIDER_META[activeProvider].label} · anslutet`}</Text>
@@ -1068,7 +1261,7 @@ function LandscapeMonitor({
           <View style={styles.monitorHeaderActions}>
             <Text style={styles.monitorUpdated}>{`Uppdaterad ${formatRelativeTime(snapshot.fetchedAt)}`}</Text>
             <Pressable
-              accessibilityLabel="Uppdatera usage"
+              accessibilityLabel="Uppdatera gränser"
               accessibilityRole="button"
               accessibilityState={{ busy: isRefreshing, disabled: isRefreshing }}
               disabled={isRefreshing}
@@ -1079,6 +1272,14 @@ function LandscapeMonitor({
               ) : (
                 <Ionicons name="refresh" size={22} color="#FFFFFF" />
               )}
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Stäng monitor"
+              accessibilityRole="button"
+              onPress={onExit}
+              style={({ pressed }) => [styles.monitorExitButton, pressed && styles.monitorPressed]}>
+              <AppSymbol fallback="close" name="xmark" size={19} color="#FFFFFF" />
+              <Text style={styles.monitorExitText}>Stäng</Text>
             </Pressable>
           </View>
         </View>
@@ -1091,8 +1292,8 @@ function LandscapeMonitor({
             </View>
 
             <View style={styles.monitorMetricRow}>
-              <Text style={styles.monitorMetric}>{utilization}%</Text>
-              <Text style={styles.monitorMetricSuffix}>använt</Text>
+              <Text style={styles.monitorMetric}>{remaining}%</Text>
+              <Text style={styles.monitorMetricSuffix}>kvar</Text>
             </View>
 
             <View
@@ -1170,13 +1371,13 @@ function PrimaryUsagePanel({
       <View style={styles.primaryHeader}>
         <Text style={styles.primaryLabel}>{formatWindowTitle(window)}</Text>
         <View style={styles.remainingBadge}>
-          <Text style={styles.remainingBadgeText}>{remaining}% kvar</Text>
+          <Text style={styles.remainingBadgeText}>{utilization}% använt</Text>
         </View>
       </View>
 
       <View style={styles.primaryValueRow}>
-        <Text style={styles.primaryValue}>{utilization}%</Text>
-        <Text style={styles.primaryValueSuffix}>använt</Text>
+        <Text style={styles.primaryValue}>{remaining}%</Text>
+        <Text style={styles.primaryValueSuffix}>kvar</Text>
       </View>
 
       <View
@@ -1229,6 +1430,32 @@ function UsageLimitRow({
   );
 }
 
+function friendlyError(error: unknown, provider: UsageProvider, hasSnapshot: boolean): string {
+  const label = PROVIDER_META[provider].label;
+  if (error instanceof CodexAuthRequiredError) {
+    return hasSnapshot
+      ? 'Logga in igen för att uppdatera. Senast hämtade värde visas.'
+      : 'Logga in på Codex för att se dina gränser.';
+  }
+  const fallback = `${label} kunde inte nås. Kontrollera internet och försök igen.`;
+  const message = error instanceof Error && error.message.trim() ? error.message : fallback;
+  return hasSnapshot ? `${message} Senast hämtade värde visas.` : message;
+}
+
+function friendlyTimeout(provider: UsageProvider, hasSnapshot: boolean): string {
+  const message = `${PROVIDER_META[provider].label} svarar långsamt. Försök igen om en stund.`;
+  return hasSnapshot ? `${message} Senast hämtade värde visas.` : message;
+}
+
+function formatCountdown(expiresAt: Date, currentTime: number): string {
+  const seconds = Math.max(0, Math.ceil((expiresAt.getTime() - currentTime) / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return seconds > 0
+    ? `Gäller i ${minutes}:${String(remainder).padStart(2, '0')}`
+    : 'Koden har gått ut';
+}
+
 function formatWindowTitle(window: UsageWindow): string {
   if (window.id === 'five-hour') return '5-timmarsgräns';
   if (window.id === 'weekly') return 'Veckogräns';
@@ -1249,6 +1476,15 @@ function getProviderFromURL(url: string): UsageProvider | null {
   if (isClaudeURL(url)) return 'claude';
   if (isCodexURL(url)) return 'codex';
   return null;
+}
+
+function isClaudeLoginURL(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return isClaudeURL(url) && parsed.pathname.startsWith('/login');
+  } catch {
+    return false;
+  }
 }
 
 function formatReset(window: UsageWindow, now = new Date()): string {
@@ -1294,6 +1530,7 @@ function dismissOpenBrowser(): void {
 function createStyles(palette: Palette, providerTheme: ProviderTheme) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: palette.root },
+    hiddenTransport: { position: 'absolute', left: -4, bottom: -4, width: 2, height: 2, opacity: 0 },
     safeArea: { flex: 1 },
     monitorRoot: { backgroundColor: '#0E0F11' },
     monitorSafeArea: { flex: 1, backgroundColor: '#0E0F11' },
@@ -1320,6 +1557,8 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     monitorHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 13 },
     monitorUpdated: { color: '#92949B', fontSize: 14, fontWeight: '500' },
     monitorRefreshButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#242529', alignItems: 'center', justifyContent: 'center' },
+    monitorExitButton: { minHeight: 44, paddingHorizontal: 14, borderRadius: 14, backgroundColor: '#242529', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+    monitorExitText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
     monitorPressed: { opacity: 0.62, transform: [{ scale: 0.97 }] },
     monitorBody: { flex: 1, minHeight: 0, flexDirection: 'row', gap: 14 },
     monitorPrimary: {
@@ -1361,6 +1600,7 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     monitorLimitReset: { color: '#C8C9CE', fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
     monitorLimitResetSingle: { fontSize: 18 },
     content: { paddingHorizontal: 20, paddingTop: 16, gap: 24 },
+    screenContent: { gap: 24 },
     signedOutLandscapeContent: { paddingTop: 8, gap: 14 },
     header: { minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     title: { color: palette.ink, fontSize: 36, fontWeight: '700', letterSpacing: -1.1 },
@@ -1431,6 +1671,7 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     freshnessTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
     freshnessTitle: { color: palette.ink, fontSize: 14, fontWeight: '600' },
     caption: { color: palette.secondary, fontSize: 12, marginTop: 4, marginLeft: 14 },
+    refreshHint: { color: palette.secondary, fontSize: 13, lineHeight: 18, marginTop: -12 },
     refreshButton: {
       width: 48,
       height: 48,
@@ -1450,6 +1691,8 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
       alignItems: 'center',
       gap: 12,
     },
+    monitorButton: { minHeight: 48, width: '100%', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+    monitorButtonText: { color: palette.ink, fontSize: 15, fontWeight: '700' },
     privacyInline: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
     privacyText: { flex: 1, color: palette.secondary, fontSize: 12, lineHeight: 17 },
     shareButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
@@ -1484,7 +1727,10 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     assuranceRow: { flexDirection: 'row', alignItems: 'center', gap: 11 },
     assuranceText: { flex: 1, color: palette.secondary, fontSize: 14, lineHeight: 20 },
     errorCard: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', padding: 14, borderRadius: 12, backgroundColor: palette.errorBackground },
-    errorText: { flex: 1, color: palette.errorText, fontSize: 13, lineHeight: 19 },
+    errorBody: { flex: 1, alignItems: 'flex-start', gap: 10 },
+    errorText: { color: palette.errorText, fontSize: 13, lineHeight: 19 },
+    errorAction: { minHeight: 44, paddingHorizontal: 14, borderRadius: 11, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.errorText, alignItems: 'center', justifyContent: 'center' },
+    errorActionText: { color: palette.errorText, fontSize: 14, fontWeight: '700' },
     loginOverlayVisible: { ...StyleSheet.absoluteFill, zIndex: 10, elevation: 10, backgroundColor: palette.surface },
     loginOverlayHidden: { position: 'absolute', width: 2, height: 2, left: -10, bottom: -10, opacity: 0 },
     loginSafeArea: { flex: 1, backgroundColor: palette.surface },
@@ -1492,6 +1738,8 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     loginTitle: { color: palette.ink, fontSize: 17, fontWeight: '700' },
     loginAction: { color: palette.accent, fontSize: 16, fontWeight: '600', minWidth: 48 },
     loginHeaderSpacer: { width: 48 },
+    headerActionHitbox: { minWidth: 48, minHeight: 44, justifyContent: 'center' },
+    loginActionRight: { textAlign: 'right' },
     loginHint: { minHeight: 54, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: palette.accentSoft, flexDirection: 'row', alignItems: 'center', gap: 10 },
     loginHintText: { flex: 1, color: palette.ink, fontSize: 13, lineHeight: 18 },
     deviceLoginScroll: { flex: 1, backgroundColor: palette.surface },
@@ -1532,6 +1780,7 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     },
     deviceCodeLabel: { color: palette.heroMuted, fontSize: 11, fontWeight: '700', letterSpacing: 0.7 },
     deviceCode: { color: palette.heroText, fontSize: 32, fontWeight: '800', letterSpacing: 2.2, fontFamily: 'Courier' },
+    deviceCodeCountdown: { color: palette.heroMuted, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
     deviceLoginButton: {
       width: '100%',
       maxWidth: 350,
@@ -1564,5 +1813,12 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     deviceLoginPrivacy: { marginTop: 'auto', maxWidth: 330, color: palette.tertiary, fontSize: 12, lineHeight: 18, textAlign: 'center' },
     webViewHost: { flex: 1, overflow: 'hidden' },
     webView: { flex: 1, backgroundColor: '#FFFFFF' },
+    accountSheet: { flex: 1, backgroundColor: palette.root },
+    accountContent: { flex: 1, paddingHorizontal: 24, paddingTop: 42, alignItems: 'center', gap: 16 },
+    accountIcon: { width: 82, height: 82, borderRadius: 24, backgroundColor: palette.accentSoft, alignItems: 'center', justifyContent: 'center' },
+    accountTitle: { color: palette.ink, fontSize: 25, fontWeight: '800', textAlign: 'center', letterSpacing: -0.4 },
+    accountText: { maxWidth: 360, color: palette.secondary, fontSize: 16, lineHeight: 23, textAlign: 'center' },
+    disconnectButton: { width: '100%', maxWidth: 360, minHeight: 52, marginTop: 18, paddingHorizontal: 18, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.danger, backgroundColor: palette.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+    disconnectButtonText: { color: palette.danger, fontSize: 16, fontWeight: '700' },
   });
 }
