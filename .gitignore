@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Dependencies and local Expo files
+ClaudeUsageExpo/node_modules/
+ClaudeUsageExpo/.expo/
+ClaudeUsageExpo/dist/
+ClaudeUsageExpo/.impeccable/
+ClaudeUsageExpo/.git/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Xcode user-specific files
+**/xcuserdata/
+**/*.xcuserstate
+
