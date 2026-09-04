@@ -814,9 +814,10 @@ export function UsageDashboard() {
         </SafeAreaView>
       )}
 
-      <SafeAreaView
+      <View
         pointerEvents={isShowingLogin ? 'auto' : 'none'}
         style={isShowingLogin ? styles.loginOverlayVisible : styles.loginOverlayHidden}>
+        <SafeAreaView style={styles.loginSafeArea} edges={['top', 'bottom', 'left', 'right']}>
           <View style={styles.loginHeader}>
             <Pressable accessibilityRole="button" onPress={dismissLogin} hitSlop={12}>
               <Text style={styles.loginAction}>Avbryt</Text>
@@ -970,7 +971,8 @@ export function UsageDashboard() {
               />
             </View>
           )}
-      </SafeAreaView>
+        </SafeAreaView>
+      </View>
     </View>
   );
 }
@@ -1483,8 +1485,9 @@ function createStyles(palette: Palette, providerTheme: ProviderTheme) {
     assuranceText: { flex: 1, color: palette.secondary, fontSize: 14, lineHeight: 20 },
     errorCard: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', padding: 14, borderRadius: 12, backgroundColor: palette.errorBackground },
     errorText: { flex: 1, color: palette.errorText, fontSize: 13, lineHeight: 19 },
-    loginOverlayVisible: { ...StyleSheet.absoluteFillObject, zIndex: 10, backgroundColor: palette.surface },
+    loginOverlayVisible: { ...StyleSheet.absoluteFill, zIndex: 10, elevation: 10, backgroundColor: palette.surface },
     loginOverlayHidden: { position: 'absolute', width: 2, height: 2, left: -10, bottom: -10, opacity: 0 },
+    loginSafeArea: { flex: 1, backgroundColor: palette.surface },
     loginHeader: { height: 56, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line, backgroundColor: palette.surface },
     loginTitle: { color: palette.ink, fontSize: 17, fontWeight: '700' },
     loginAction: { color: palette.accent, fontSize: 16, fontWeight: '600', minWidth: 48 },
