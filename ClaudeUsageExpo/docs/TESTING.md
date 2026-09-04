@@ -16,10 +16,10 @@ Baslinje 2026-09-04:
 
 | Område | Statements | Branches | Functions | Lines |
 |---|---:|---:|---:|---:|
-| Totalt testad appkod | 61,95 % | 61,73 % | 59,88 % | 64,55 % |
-| `src/domain/usage.ts` | 97,75 % | 93,69 % | 100 % | 98,61 % |
-| `src/features/dashboard/UsageDashboard.tsx` | 50,97 % | 49,85 % | 47,01 % | 53,76 % |
-| Infrastruktur totalt | 83,21 % | 67,21 % | 100 % | 86,25 % |
+| Totalt testad appkod | 62,57 % | 63,50 % | 61,14 % | 65,14 % |
+| `src/domain/usage.ts` | 97,82 % | 92,92 % | 100 % | 98,64 % |
+| `src/features/dashboard/UsageDashboard.tsx` | 51,49 % | 51,23 % | 48,48 % | 54,36 % |
+| Infrastruktur totalt | 83,56 % | 72,58 % | 100 % | 86,46 % |
 
 ## Safety Net Map
 
@@ -28,8 +28,8 @@ Baslinje 2026-09-04:
 | `src/domain/usage.ts` | Claude 5h/vecka/scoped; högsta scoped-gräns; fallbacktitel; saknade datum; clamp 0–100; ogiltiga fönster; Codex snake/camel case; numeriska strängar; durationstyrd klassning; weekly-only; response-order fallback; relativa resetdatum | `__tests__/usage.test.ts` | Fler verkliga leverantörsfixtures; lokaliserad JSON-parse recovery är medvetet inte pinnad som önskat beteende |
 | `src/infrastructure/claudeWebBridge.ts` | HTTPS-allowlist; subdomäner; lookalike-avvisning; giltiga meddelanden; ogiltiga envelopes; request-ID-escaping; nuvarande endpoints | `__tests__/bridges.test.ts` | Runtime-schema validerar ännu inte varje unionsvariant |
 | `src/infrastructure/codexWebBridge.ts` | HTTPS-allowlist; message envelope; request-ID-escaping; nuvarande endpoints | `__tests__/bridges.test.ts` | Transporten används inte av dashboarden; full payloadvalidering saknas |
-| `src/infrastructure/codexDeviceAuth.ts` | Device-code mapping; minsta pollintervall; fallback-expiry; 403/404 pending; token exchange; fyra Keychain-värden; saknade tokens; authheaders; 401 refresh + exakt en retry; refresh rejection + rensning; explicit rensning; 15 s timeout | `__tests__/codexDeviceAuth.test.ts` | Tillfälliga pollnätfel; andra JWT-varianter; andra svarskoder efter retry |
-| `src/features/dashboard/UsageDashboard.tsx` | Frånkopplat Claude-läge; providerbyte och persistens; framgångsrik Claude-hämtning; kvar/använt-rendering; stale snapshot vid bridgefel; stale snapshot vid auth expiry; korrekt recovery-CTA; explicit monitor in/ut; login utan manuell Klar; Google-blockering | `__tests__/UsageDashboard.test.tsx` | Codex-modal och expiry; frånkopplingsbekräftelse/cookiefallback; AppState/auto-refresh; request-timeout; kontoblad; VoiceOver announcements; större text och Reduce Motion |
+| `src/infrastructure/codexDeviceAuth.ts` | Device-code mapping; minsta pollintervall; fallback-expiry; 403/404 pending; token exchange; fyra Keychain-värden; saknade tokens; authheaders; oläsbar JWT utan kontoheader; 401 refresh + exakt en retry; refresh rejection + rensning; explicit rensning; 15 s timeout | `__tests__/codexDeviceAuth.test.ts` | Tillfälliga pollnätfel; andra JWT-varianter; andra svarskoder efter retry |
+| `src/features/dashboard/UsageDashboard.tsx` | Frånkopplat Claude-läge; providerbyte och persistens; framgångsrik Claude-hämtning; kvar/använt-rendering; stale snapshot vid bridgefel; stale snapshot vid auth expiry; korrekt recovery-CTA; explicit monitor in/ut; login utan manuell Klar; Google-navigation och bridge-signal blockeras | `__tests__/UsageDashboard.test.tsx` | Codex-modal och expiry; frånkopplingsbekräftelse/cookiefallback; AppState/auto-refresh; request-timeout; kontoblad; VoiceOver announcements; större text och Reduce Motion |
 
 Rader i kolumnen Gaps är utanför den refaktoreringsbara säkerhetsytan tills motsvarande test har lagts till.
 
@@ -47,7 +47,7 @@ Rader i kolumnen Gaps är utanför den refaktoreringsbara säkerhetsytan tills m
 
 - Lokal obligatorisk gate: `npm run check`.
 - Coverage-diagnostik: `npm run test:coverage`.
-- Phase 1-baslinje: 57 tester i fyra filer, samtliga gröna.
+- Phase 2-baslinje: 59 tester i fyra filer, samtliga gröna.
 - Strukturcommits får inte ändra förväntade resultat eller snapshots.
 - Beteendeändringar ska ha ett test som går rött före fix och grönt efter fix.
 - [ ] Lägg `npm run check` i CI på varje pull request (ägare: repoägare, prioritet: P0 före release).
