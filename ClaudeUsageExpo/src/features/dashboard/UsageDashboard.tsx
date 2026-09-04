@@ -738,7 +738,7 @@ export function UsageDashboard() {
           <Animated.View style={[styles.screenContent, { opacity: contentOpacity }]}>
           <View style={styles.header}>
             <View>
-              <Text style={styles.title}>Kapacitet</Text>
+              <Text style={styles.title}>Usage</Text>
               <View style={styles.connectionRow}>
                 <View style={[styles.statusDot, { backgroundColor: needsSignIn ? palette.danger : errorMessage ? palette.accent : snapshot ? palette.success : palette.secondary }]} />
                 <Text style={styles.connectionText}>

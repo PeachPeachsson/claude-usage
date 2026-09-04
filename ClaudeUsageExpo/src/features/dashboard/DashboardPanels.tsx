@@ -117,7 +117,7 @@ export function LandscapeMonitor({
       <View style={styles.monitorShell}>
         <View style={styles.monitorHeader}>
           <View style={styles.monitorIdentity}>
-            <Text style={styles.monitorBrand}>Kapacitet</Text>
+            <Text style={styles.monitorBrand}>Usage</Text>
             <View style={styles.monitorConnection}>
               <View style={[styles.monitorStatusDot, styles.monitorLiveDot]} />
               <Text style={styles.monitorConnectionText}>{`${PROVIDER_META[activeProvider].label} · anslutet`}</Text>

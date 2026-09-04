@@ -168,7 +168,7 @@ describe('UsageDashboard characterization', () => {
     await render(<UsageDashboard />);
     await settleEffects();
 
-    expect(screen.getByText('Kapacitet')).toBeTruthy();
+    expect(screen.getByText('Usage')).toBeTruthy();
     expect(screen.getByText('Claude · inloggning krävs')).toBeTruthy();
     expect(screen.getByText('Fortsätt med Claude')).toBeTruthy();
   });
