@@ -693,6 +693,7 @@ export function UsageDashboard() {
         key={`claude-transport-${transportKey}`}
         ref={webViewRef}
         source={{ uri: CLAUDE_HOME_URL }}
+        containerStyle={styles.hiddenTransport}
         style={styles.hiddenTransport}
         pointerEvents="none"
         javaScriptEnabled

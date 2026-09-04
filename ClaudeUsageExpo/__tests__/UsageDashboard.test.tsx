@@ -153,6 +153,17 @@ describe('UsageDashboard characterization', () => {
     expect(scrollView.props.contentInset).toEqual({ bottom: 0, left: 0, right: 0, top: 0 });
   });
 
+  it('keeps the hidden Claude transport out of the dashboard layout flow', async () => {
+    await render(<UsageDashboard />);
+    await settleEffects();
+
+    expect(latestWebViewProps().containerStyle).toMatchObject({
+      height: 2,
+      position: 'absolute',
+      width: 2,
+    });
+  });
+
   it('starts disconnected and offers Claude login', async () => {
     await render(<UsageDashboard />);
     await settleEffects();
