@@ -43,7 +43,7 @@ import {
   CODEX_HOME_URL,
   CODEX_LOGIN_URL,
   isCodexURL,
-} from '@/src/infrastructure/codexWebBridge';
+} from '@/src/infrastructure/codexWeb';
 import {
   CodexAuthRequiredError,
   CodexDeviceAuthorization,

@@ -4,10 +4,8 @@ import {
   parseBridgeMessage,
 } from '@/src/infrastructure/claudeWebBridge';
 import {
-  buildCodexUsageRequestScript,
   isCodexURL,
-  parseCodexBridgeMessage,
-} from '@/src/infrastructure/codexWebBridge';
+} from '@/src/infrastructure/codexWeb';
 
 describe('provider URL allowlists', () => {
   it.each([
@@ -54,28 +52,5 @@ describe('Claude bridge messages', () => {
     expect(script).toContain('const requestId = "quote\\"\\n</script>";');
     expect(script).toContain("fetch('/api/organizations'");
     expect(script).toContain("encodeURIComponent(organizationId) + '/usage'");
-  });
-});
-
-describe('Codex bridge messages', () => {
-  it('parses a valid usage message', () => {
-    const message = { type: 'usage', requestId: 'c1', status: 200, body: '{}' };
-    expect(parseCodexBridgeMessage(JSON.stringify(message))).toEqual(message);
-  });
-
-  it.each(['not json', 'null', '{}', '{"requestId":"c2"}'])('rejects invalid envelope %s', (value) => {
-    expect(parseCodexBridgeMessage(value)).toBeNull();
-  });
-
-  it('currently accepts a malformed known message with only envelope fields', () => {
-    const message = { type: 'usage', requestId: 'c3' };
-    expect(parseCodexBridgeMessage(JSON.stringify(message))).toEqual(message);
-  });
-
-  it('escapes request IDs and targets the current Codex endpoints', () => {
-    const script = buildCodexUsageRequestScript('code"\n');
-    expect(script).toContain('const requestId = "code\\"\\n";');
-    expect(script).toContain("fetch('/api/auth/session'");
-    expect(script).toContain("fetch('/backend-api/wham/usage'");
   });
 });
