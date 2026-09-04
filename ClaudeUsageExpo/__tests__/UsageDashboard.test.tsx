@@ -37,7 +37,7 @@ jest.mock('expo-symbols', () => ({
   SymbolView: ({ fallback }: { fallback: React.ReactNode }) => fallback,
 }));
 jest.mock('react-native-safe-area-context', () => {
-  const ReactNative = require('react-native') as typeof import('react-native');
+  const ReactNative = jest.requireActual<typeof import('react-native')>('react-native');
   return {
     SafeAreaView: ReactNative.View,
     useSafeAreaInsets: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
@@ -45,8 +45,8 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 jest.mock('react-native-webview', () => {
-  const ReactModule = require('react') as typeof React;
-  const ReactNative = require('react-native') as typeof import('react-native');
+  const ReactModule = jest.requireActual<typeof import('react')>('react');
+  const ReactNative = jest.requireActual<typeof import('react-native')>('react-native');
   const WebView = ReactModule.forwardRef((props: Record<string, unknown>, ref) => {
     mockWebViewProps.push(props);
     ReactModule.useImperativeHandle(ref, () => ({
