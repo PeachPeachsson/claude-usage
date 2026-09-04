@@ -224,4 +224,18 @@ describe('UsageDashboard characterization', () => {
     expect(shouldLoad).toBe(false);
     expect(screen.getByText(/Google tillåter inte/)).toBeTruthy();
   });
+
+  it('shows recovery guidance when the Claude bridge reports a blocked Google login', async () => {
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await fireEvent.press(screen.getByText('Fortsätt med Claude'));
+
+    await act(async () => {
+      latestWebViewProps().onMessage({
+        nativeEvent: { data: JSON.stringify({ type: 'google-login-blocked' }) },
+      });
+    });
+
+    expect(screen.getByText(/Google tillåter inte/)).toBeTruthy();
+  });
 });

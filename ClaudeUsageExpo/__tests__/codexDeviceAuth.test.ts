@@ -162,6 +162,23 @@ describe('stored Codex authentication characterization', () => {
     );
   });
 
+  it('omits the account header when stored tokens have no readable account ID', async () => {
+    seedStoredTokens({
+      [ACCESS_TOKEN_KEY]: 'malformed-access-token',
+      [ID_TOKEN_KEY]: 'malformed-id-token',
+      [ACCOUNT_ID_KEY]: null,
+    });
+    fetchMock.mockResolvedValueOnce(response({ text: '{"usage":true}' }));
+
+    await expect(fetchCodexUsageWithStoredAuth()).resolves.toBe('{"usage":true}');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chatgpt.com/backend-api/wham/usage',
+      expect.objectContaining({
+        headers: expect.not.objectContaining({ 'ChatGPT-Account-Id': expect.anything() }),
+      }),
+    );
+  });
+
   it('refreshes once after 401, persists replacement tokens and retries usage', async () => {
     seedStoredTokens();
     fetchMock
