@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
+import { Alert } from 'react-native';
 
 import { UsageDashboard } from '@/src/features/dashboard/UsageDashboard';
 
@@ -7,6 +8,16 @@ const mockStorageValues = new Map<string, string>();
 const mockInjectedScripts: string[] = [];
 const mockWebViewProps: Record<string, unknown>[] = [];
 const mockLockAsync = jest.fn();
+const mockClearCodexAuth = jest.fn(async () => undefined);
+const mockFetchCodexUsage = jest.fn<Promise<string>, []>();
+const mockPollCodexAuthorization = jest.fn<Promise<null>, [unknown]>(async () => null);
+const mockRequestCodexAuthorization = jest.fn(async () => ({
+  deviceAuthId: 'device-dashboard',
+  expiresAt: new Date(Date.now() + 15 * 60_000),
+  intervalSeconds: 5,
+  userCode: 'ABCD-EFGH',
+  verificationUrl: 'https://auth.openai.com/codex/device',
+}));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   multiGet: jest.fn(async (keys: string[]) => keys.map((key) => [key, mockStorageValues.get(key) ?? null])),
@@ -62,10 +73,10 @@ jest.mock('@/src/infrastructure/codexDeviceAuth', () => {
   const actual = jest.requireActual('@/src/infrastructure/codexDeviceAuth');
   return {
     ...actual,
-    clearCodexAuth: jest.fn(async () => undefined),
-    fetchCodexUsageWithStoredAuth: jest.fn(async () => {
-      throw new actual.CodexAuthRequiredError();
-    }),
+    clearCodexAuth: () => mockClearCodexAuth(),
+    fetchCodexUsageWithStoredAuth: () => mockFetchCodexUsage(),
+    pollCodexDeviceAuthorization: (...args: [unknown]) => mockPollCodexAuthorization(...args),
+    requestCodexDeviceAuthorization: () => mockRequestCodexAuthorization(),
   };
 });
 
@@ -116,6 +127,12 @@ beforeEach(() => {
   mockInjectedScripts.length = 0;
   mockWebViewProps.length = 0;
   mockLockAsync.mockReset().mockResolvedValue(undefined);
+  mockClearCodexAuth.mockClear();
+  mockFetchCodexUsage.mockReset().mockRejectedValue(
+    new (jest.requireActual('@/src/infrastructure/codexDeviceAuth').CodexAuthRequiredError)(),
+  );
+  mockPollCodexAuthorization.mockClear().mockImplementation(() => new Promise(() => undefined));
+  mockRequestCodexAuthorization.mockClear();
 });
 
 afterEach(() => {
@@ -237,5 +254,74 @@ describe('UsageDashboard characterization', () => {
     });
 
     expect(screen.getByText(/Google tillåter inte/)).toBeTruthy();
+  });
+
+  it('shows the OpenAI device code after starting Codex login', async () => {
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await fireEvent.press(screen.getByText('Codex'));
+    await fireEvent.press(screen.getByText('Fortsätt med OpenAI'));
+    await settleEffects();
+
+    expect(mockRequestCodexAuthorization).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Logga in säkert hos OpenAI')).toBeTruthy();
+    expect(screen.getByText('ABCD-EFGH')).toBeTruthy();
+    expect(screen.getByText('Kopiera kod och öppna OpenAI')).toBeTruthy();
+  });
+
+  it('disconnects Codex from the account sheet after confirmation', async () => {
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: false, codex: true }));
+    mockStorageValues.set('usage-monitor.last-provider.v1', 'codex');
+    mockFetchCodexUsage.mockResolvedValue(JSON.stringify({
+      rate_limit: {
+        primary_window: { limit_window_seconds: 18_000, used_percent: 10 },
+      },
+    }));
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+
+    await render(<UsageDashboard />);
+    await settleEffects();
+    expect(screen.getByText('90%')).toBeTruthy();
+    await fireEvent.press(screen.getByText('Konto'));
+    expect(screen.getByText('Codex är anslutet')).toBeTruthy();
+
+    await fireEvent.press(screen.getByText('Koppla från Codex'));
+    const confirm = alert.mock.calls[0]?.[2]?.find((button) => button.style === 'destructive');
+    await act(async () => {
+      confirm?.onPress?.();
+      await Promise.resolve();
+    });
+
+    expect(mockClearCodexAuth).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Codex · inloggning krävs')).toBeTruthy();
+  });
+
+  it('times out a Claude request and ignores its late response', async () => {
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: false }));
+    await render(<UsageDashboard />);
+    await settleEffects();
+
+    await act(async () => {
+      latestWebViewProps().onLoadEnd({ nativeEvent: { url: 'https://claude.ai/' } });
+      jest.advanceTimersByTime(400);
+    });
+    const requestId = requestIdFromLatestScript();
+    await act(async () => jest.advanceTimersByTime(15_000));
+    expect(screen.getByText('Gränserna kunde inte hämtas')).toBeTruthy();
+
+    await act(async () => {
+      latestWebViewProps().onMessage({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: 'usage',
+            requestId,
+            status: 200,
+            body: JSON.stringify({ five_hour: { utilization: 5 } }),
+          }),
+        },
+      });
+    });
+    expect(screen.queryByText('95%')).toBeNull();
+    expect(screen.getByText('Gränserna kunde inte hämtas')).toBeTruthy();
   });
 });

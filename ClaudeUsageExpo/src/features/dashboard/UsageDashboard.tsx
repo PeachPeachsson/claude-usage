@@ -151,10 +151,15 @@ export function UsageDashboard() {
   const [reduceMotion, setReduceMotion] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [contentOpacity] = useState(() => new Animated.Value(1));
+  const snapshotsRef = useRef(snapshots);
 
   const snapshot = snapshots[activeProvider];
   const needsSignIn = needsSignInByProvider[activeProvider];
   const errorMessage = errorMessages[activeProvider];
+
+  useEffect(() => {
+    snapshotsRef.current = snapshots;
+  }, [snapshots]);
 
   useEffect(() => {
     void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(ignoreOrientationLockError);
@@ -204,7 +209,7 @@ export function UsageDashboard() {
       persistProviderConnection('codex', true);
       setLoginStatus('Klart — Codex-kontot är anslutet.');
     } catch (error) {
-      const message = friendlyError(error, 'codex', Boolean(snapshots.codex));
+      const message = friendlyError(error, 'codex', Boolean(snapshotsRef.current.codex));
       if (error instanceof CodexAuthRequiredError) {
         persistProviderConnection('codex', false);
         setNeedsSignInByProvider((current) => ({ ...current, codex: true }));
@@ -215,7 +220,7 @@ export function UsageDashboard() {
       codexRefreshInFlightRef.current = false;
       setIsRefreshing(false);
     }
-  }, [persistProviderConnection, snapshots.codex]);
+  }, [persistProviderConnection]);
 
   const refreshProvider = useCallback((provider: UsageProvider) => {
     if (requestIdRef.current) return;
@@ -259,11 +264,11 @@ export function UsageDashboard() {
       requestIdRef.current = null;
       requestProviderRef.current = null;
       setIsRefreshing(false);
-      const message = friendlyTimeout(provider, Boolean(snapshots[provider]));
+      const message = friendlyTimeout(provider, Boolean(snapshotsRef.current[provider]));
       setErrorMessages((current) => ({ ...current, [provider]: message }));
       if (isShowingLogin) setLoginStatus(message);
     }, 15_000);
-  }, [clearRequestTimeout, isShowingLogin, refreshCodexProvider, snapshots]);
+  }, [clearRequestTimeout, isShowingLogin, refreshCodexProvider]);
 
   useEffect(() => {
     let cancelled = false;
