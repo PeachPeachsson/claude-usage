@@ -86,6 +86,7 @@ export function ProviderSwitcher({
 
 export function LandscapeMonitor({
   activeProvider,
+  isCompact,
   isRefreshing,
   onExit,
   onRefresh,
@@ -97,6 +98,7 @@ export function LandscapeMonitor({
   styles,
 }: {
   activeProvider: UsageProvider;
+  isCompact: boolean;
   isRefreshing: boolean;
   onExit: () => void;
   onRefresh: () => void;
@@ -120,7 +122,9 @@ export function LandscapeMonitor({
             <Text style={styles.monitorBrand}>Usage</Text>
             <View style={styles.monitorConnection}>
               <View style={[styles.monitorStatusDot, styles.monitorLiveDot]} />
-              <Text style={styles.monitorConnectionText}>{`${PROVIDER_META[activeProvider].label} · anslutet`}</Text>
+              {!isCompact ? (
+                <Text style={styles.monitorConnectionText}>{`${PROVIDER_META[activeProvider].label} · anslutet`}</Text>
+              ) : null}
             </View>
           </View>
 
@@ -132,7 +136,9 @@ export function LandscapeMonitor({
           />
 
           <View style={styles.monitorHeaderActions}>
-            <Text style={styles.monitorUpdated}>{`Uppdaterad ${formatRelativeTime(snapshot.fetchedAt)}`}</Text>
+            {!isCompact ? (
+              <Text style={styles.monitorUpdated}>{`Uppdaterad ${formatRelativeTime(snapshot.fetchedAt)}`}</Text>
+            ) : null}
             <Pressable
               accessibilityLabel="Uppdatera gränser"
               accessibilityRole="button"

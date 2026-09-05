@@ -18,6 +18,7 @@ import {
   ScrollView,
   Text,
   useColorScheme,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -111,6 +112,7 @@ type CodexLoginState = {
 
 export function UsageDashboard() {
   const insets = useSafeAreaInsets();
+  const { height, width } = useWindowDimensions();
   const colorScheme = useColorScheme();
   const [activeProvider, setActiveProvider] = useState<UsageProvider>('claude');
   const appearance = colorScheme === 'dark' ? 'dark' : 'light';
@@ -145,7 +147,7 @@ export function UsageDashboard() {
   const [isCodexCodeCopied, setIsCodexCodeCopied] = useState(false);
   const [webSourceURL, setWebSourceURL] = useState(CLAUDE_HOME_URL);
   const [isShowingAccount, setIsShowingAccount] = useState(false);
-  const [isMonitorMode, setIsMonitorMode] = useState(false);
+  const [isMonitorRequested, setIsMonitorRequested] = useState(false);
   const [transportKey, setTransportKey] = useState(0);
   const [showRefreshHint, setShowRefreshHint] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -162,7 +164,7 @@ export function UsageDashboard() {
   }, [snapshots]);
 
   useEffect(() => {
-    void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(ignoreOrientationLockError);
+    void ScreenOrientation.unlockAsync().catch(ignoreOrientationLockError);
     void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
     const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
     return () => subscription.remove();
@@ -609,17 +611,13 @@ export function UsageDashboard() {
     if (provider === 'claude') webViewProviderRef.current = provider;
     setIsRefreshing(false);
     setIsShowingLogin(false);
-    if (isMonitorMode) {
-      setIsMonitorMode(false);
-      void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(ignoreOrientationLockError);
-    }
     setActiveProvider(provider);
     void AsyncStorage.setItem(LAST_PROVIDER_STORAGE_KEY, provider);
     void Haptics.selectionAsync();
     setNeedsSignInByProvider((current) => ({ ...current, [provider]: !connectedProvidersRef.current[provider] }));
     setLoginStatus(`Laddar ${PROVIDER_META[provider].label}…`);
     if (provider === 'claude') setWebSourceURL(PROVIDER_META[provider].homeURL);
-  }, [activeProvider, clearRequestTimeout, isMonitorMode]);
+  }, [activeProvider, clearRequestTimeout]);
 
   const showAccount = useCallback(() => {
     setIsShowingAccount(true);
@@ -674,18 +672,24 @@ export function UsageDashboard() {
 
   const enterMonitorMode = useCallback(async () => {
     if (!snapshot) return;
-    setIsMonitorMode(true);
+    setIsMonitorRequested(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(ignoreOrientationLockError);
   }, [snapshot]);
 
   const exitMonitorMode = useCallback(async () => {
-    setIsMonitorMode(false);
+    setIsMonitorRequested(false);
     await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(ignoreOrientationLockError);
+    await ScreenOrientation.unlockAsync().catch(ignoreOrientationLockError);
   }, []);
 
   const primaryWindow = snapshot?.windows.find((window) => window.id === 'five-hour') ?? snapshot?.windows[0] ?? null;
   const secondaryWindows = snapshot?.windows.filter((window) => window.id !== primaryWindow?.id) ?? [];
+  const isLandscape = width > height;
+  const isMonitorMode = Boolean(
+    snapshot && primaryWindow && !isShowingLogin && (isLandscape || isMonitorRequested),
+  );
+  const isSignedOutLandscape = isLandscape && !snapshot && !isShowingLogin;
 
   return (
     <View style={[styles.root, isMonitorMode && styles.monitorRoot]}>
@@ -709,6 +713,7 @@ export function UsageDashboard() {
       {isMonitorMode && snapshot && primaryWindow ? (
         <LandscapeMonitor
           activeProvider={activeProvider}
+          isCompact={width < 760}
           isRefreshing={isRefreshing}
           onExit={exitMonitorMode}
           onRefresh={() => refresh()}
@@ -732,6 +737,7 @@ export function UsageDashboard() {
           scrollIndicatorInsets={{ bottom: 0, left: 0, right: 0, top: 0 }}
           contentContainerStyle={[
             styles.content,
+            isSignedOutLandscape && styles.signedOutLandscapeContent,
             { paddingBottom: Math.max(32, insets.bottom + 20) },
           ]}
           refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => refresh()} tintColor={palette.accent} />}>
@@ -822,8 +828,8 @@ export function UsageDashboard() {
               </View>
             </View>
           ) : (
-            <View style={styles.signInPanel}>
-              <View style={styles.signInIntro}>
+            <View style={[styles.signInPanel, isSignedOutLandscape && styles.signInPanelLandscape]}>
+              <View style={[styles.signInIntro, isSignedOutLandscape && styles.signInIntroLandscape]}>
                 <View style={styles.signInIcon}>
                   <Ionicons name={errorMessage ? 'cloud-offline-outline' : 'person-outline'} size={32} color={palette.accent} />
                 </View>
@@ -847,7 +853,7 @@ export function UsageDashboard() {
                 </View>
               </View>
 
-              <View style={styles.signInActions}>
+              <View style={[styles.signInActions, isSignedOutLandscape && styles.signInActionsLandscape]}>
                 {needsSignIn || errorMessage ? (
                   <Pressable
                     accessibilityLabel={errorMessage && !needsSignIn ? 'Försök hämta gränser igen' : `Logga in på ${PROVIDER_META[activeProvider].label}`}
@@ -868,7 +874,7 @@ export function UsageDashboard() {
                   </View>
                 )}
 
-                <View style={styles.signInAssurances}>
+                <View style={[styles.signInAssurances, isSignedOutLandscape && styles.signInAssurancesLandscape]}>
                   <View style={styles.assuranceRow}>
                     <Ionicons name="key-outline" size={19} color={palette.accent} />
                     <Text style={styles.assuranceText}>Du behöver normalt bara logga in en gång.</Text>

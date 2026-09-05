@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, Dimensions } from 'react-native';
 
 import { UsageDashboard } from '@/src/features/dashboard/UsageDashboard';
 
@@ -8,6 +8,7 @@ const mockStorageValues = new Map<string, string>();
 const mockInjectedScripts: string[] = [];
 const mockWebViewProps: Record<string, unknown>[] = [];
 const mockLockAsync = jest.fn();
+const mockUnlockAsync = jest.fn();
 const mockClearCodexAuth = jest.fn(async () => undefined);
 const mockFetchCodexUsage = jest.fn<Promise<string>, []>();
 const mockPollCodexAuthorization = jest.fn<Promise<null>, [unknown]>(async () => null);
@@ -36,6 +37,7 @@ jest.mock('expo-haptics', () => ({
 jest.mock('expo-screen-orientation', () => ({
   OrientationLock: { LANDSCAPE: 'landscape', PORTRAIT_UP: 'portrait' },
   lockAsync: (...args: unknown[]) => mockLockAsync(...args),
+  unlockAsync: (...args: unknown[]) => mockUnlockAsync(...args),
 }));
 
 jest.mock('expo-keep-awake', () => ({ useKeepAwake: jest.fn() }));
@@ -127,6 +129,11 @@ beforeEach(() => {
   mockInjectedScripts.length = 0;
   mockWebViewProps.length = 0;
   mockLockAsync.mockReset().mockResolvedValue(undefined);
+  mockUnlockAsync.mockReset().mockResolvedValue(undefined);
+  Dimensions.set({
+    screen: { fontScale: 1, height: 844, scale: 3, width: 390 },
+    window: { fontScale: 1, height: 844, scale: 3, width: 390 },
+  });
   mockClearCodexAuth.mockClear();
   mockFetchCodexUsage.mockReset().mockRejectedValue(
     new (jest.requireActual('@/src/infrastructure/codexDeviceAuth').CodexAuthRequiredError)(),
@@ -248,6 +255,28 @@ describe('UsageDashboard characterization', () => {
     await fireEvent.press(screen.getByText('Stäng'));
     await settleEffects();
     expect(mockLockAsync).toHaveBeenLastCalledWith('portrait');
+    expect(mockUnlockAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('automatically shows the monitor when the connected iPhone rotates', async () => {
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: false }));
+
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await connectClaude(10);
+    expect(screen.queryByLabelText('Stäng monitor')).toBeNull();
+
+    await act(async () => {
+      Dimensions.set({
+        screen: { fontScale: 1, height: 375, scale: 2, width: 667 },
+        window: { fontScale: 1, height: 375, scale: 2, width: 667 },
+      });
+    });
+
+    expect(mockUnlockAsync).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Stäng monitor')).toBeTruthy();
+    expect(screen.getByText('90%')).toBeTruthy();
+    expect(screen.queryByText('Claude · anslutet')).toBeNull();
   });
 
   it('opens Claude login without a manual completion action and blocks Google navigation', async () => {
