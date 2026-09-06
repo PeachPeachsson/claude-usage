@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
 import { useKeepAwake } from 'expo-keep-awake';
 import { SymbolView } from 'expo-symbols';
 import { ComponentProps } from 'react';
@@ -20,6 +21,11 @@ import {
 
 type IOSSymbolName = Extract<ComponentProps<typeof SymbolView>['name'], string>;
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
+
+const PROVIDER_LOGOS = {
+  claude: require('@/assets/brands/claude.svg'),
+  codex: require('@/assets/brands/codex.svg'),
+};
 
 export function AppSymbol({
   color,
@@ -58,6 +64,8 @@ export function ProviderSwitcher({
     <View style={isMonitor ? styles.monitorProviderSwitcher : styles.providerSwitcher}>
       {PROVIDERS.map((provider) => {
         const selected = provider === activeProvider;
+        const labelStyle = isMonitor ? styles.monitorProviderOptionText : styles.providerOptionText;
+        const selectedLabelStyle = isMonitor ? styles.monitorProviderOptionTextActive : styles.providerOptionTextActive;
         return (
           <Pressable
             key={provider}
@@ -70,11 +78,15 @@ export function ProviderSwitcher({
               selected && (isMonitor ? styles.monitorProviderOptionActive : styles.providerOptionActive),
               pressed && styles.pressed,
             ]}>
+            <Image
+              source={PROVIDER_LOGOS[provider]}
+              style={isMonitor ? styles.monitorProviderLogo : styles.providerLogo}
+              contentFit="contain"
+              tintColor={selected ? selectedLabelStyle.color : labelStyle.color}
+              accessible={false}
+            />
             <Text
-              style={[
-                isMonitor ? styles.monitorProviderOptionText : styles.providerOptionText,
-                selected && (isMonitor ? styles.monitorProviderOptionTextActive : styles.providerOptionTextActive),
-              ]}>
+              style={[labelStyle, selected && selectedLabelStyle]}>
               {PROVIDER_META[provider].label}
             </Text>
           </Pressable>

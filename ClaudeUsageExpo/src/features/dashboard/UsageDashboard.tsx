@@ -41,6 +41,7 @@ import {
   UsageProvider,
 } from '@/src/features/dashboard/dashboardTheme';
 import { createDashboardStyles } from '@/src/features/dashboard/dashboardStyles';
+import { ProviderBackdrop } from '@/src/features/dashboard/ProviderBackdrop';
 import {
   formatCountdown,
   formatRelativeTime,
@@ -707,6 +708,7 @@ export function UsageDashboard() {
 
   return (
     <View style={[styles.root, isMonitorMode && styles.monitorRoot]}>
+      <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
       <WebView
         key={`claude-transport-${transportKey}`}
         ref={webViewRef}

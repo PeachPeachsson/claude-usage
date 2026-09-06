@@ -312,6 +312,7 @@ describe('UsageDashboard characterization', () => {
       backgroundColor: 'rgba(9, 15, 20, 0.12)',
       borderRadius: 999,
     });
+    expect(screen.getByText('90% kvar').props.style).toMatchObject({ fontSize: 18 });
     expect(screen.queryByText('Claude · anslutet')).toBeNull();
   });
 
