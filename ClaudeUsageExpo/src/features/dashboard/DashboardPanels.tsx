@@ -167,18 +167,20 @@ export function LandscapeMonitor({
           <View style={styles.monitorPrimary}>
             <View style={styles.monitorPrimaryHeader}>
               <Text style={styles.monitorPrimaryTitle}>{formatMonitorTitle(primaryWindow)}</Text>
-              <Text style={styles.monitorRemaining}>{remaining}% kvar</Text>
+              <View style={styles.monitorRemainingBadge}>
+                <Text style={styles.monitorRemaining}>{remaining}% kvar</Text>
+              </View>
             </View>
 
             <View style={styles.monitorMetricRow}>
-              <Text style={styles.monitorMetric}>{remaining}%</Text>
-              <Text style={styles.monitorMetricSuffix}>kvar</Text>
+              <Text style={styles.monitorMetric}>{utilization}%</Text>
+              <Text style={styles.monitorMetricSuffix}>använt</Text>
             </View>
 
             <View
               accessibilityLabel={`${formatWindowTitle(primaryWindow)}, ${utilization} procent använt`}
               accessibilityRole="progressbar"
-              accessibilityValue={{ min: 0, max: 100, now: utilization, text: `${remaining} procent kvar` }}
+              accessibilityValue={{ min: 0, max: 100, now: utilization, text: `${utilization} procent använt` }}
               style={styles.monitorPrimaryTrack}>
               <View style={[styles.monitorPrimaryFill, { width: `${primaryWindow.utilization}%` }]} />
             </View>
@@ -250,19 +252,19 @@ export function PrimaryUsagePanel({
       <View style={styles.primaryHeader}>
         <Text style={styles.primaryLabel}>{formatWindowTitle(window)}</Text>
         <View style={styles.remainingBadge}>
-          <Text style={styles.remainingBadgeText}>{utilization}% använt</Text>
+          <Text style={styles.remainingBadgeText}>{remaining}% kvar</Text>
         </View>
       </View>
 
       <View style={styles.primaryValueRow}>
-        <Text style={styles.primaryValue}>{remaining}%</Text>
-        <Text style={styles.primaryValueSuffix}>kvar</Text>
+        <Text style={styles.primaryValue}>{utilization}%</Text>
+        <Text style={styles.primaryValueSuffix}>använt</Text>
       </View>
 
       <View
         accessibilityLabel={`${formatWindowTitle(window)}, ${utilization} procent använt`}
         accessibilityRole="progressbar"
-        accessibilityValue={{ min: 0, max: 100, now: utilization, text: `${remaining} procent kvar` }}
+        accessibilityValue={{ min: 0, max: 100, now: utilization, text: `${utilization} procent använt` }}
         style={styles.primaryTrack}>
         <View style={[styles.primaryFill, { width: `${window.utilization}%` }]} />
       </View>

@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import Constants from 'expo-constants';
 import React from 'react';
-import { Alert, Dimensions } from 'react-native';
+import { Alert, Dimensions, TurboModuleRegistry } from 'react-native';
 
 import { UsageDashboard } from '@/src/features/dashboard/UsageDashboard';
 
@@ -10,7 +11,9 @@ const mockWebViewProps: Record<string, unknown>[] = [];
 const mockLockAsync = jest.fn();
 const mockUnlockAsync = jest.fn();
 const mockClearCodexAuth = jest.fn(async () => undefined);
+const mockClearClaudeCookies = jest.fn<Promise<boolean>, [boolean?]>(async () => true);
 const mockFetchCodexUsage = jest.fn<Promise<string>, []>();
+const mockReloadClaudeTransport = jest.fn();
 const mockPollCodexAuthorization = jest.fn<Promise<null>, [unknown]>(async () => null);
 const mockRequestCodexAuthorization = jest.fn(async () => ({
   deviceAuthId: 'device-dashboard',
@@ -32,6 +35,16 @@ jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(async () => undefined),
   notificationAsync: jest.fn(async () => undefined),
   selectionAsync: jest.fn(async () => undefined),
+}));
+jest.mock('expo-constants', () => ({
+  __esModule: true,
+  default: { appOwnership: 'expo' },
+}));
+jest.mock('@preeternal/react-native-cookie-manager', () => ({
+  __esModule: true,
+  default: {
+    clearAll: (useWebKit?: boolean) => mockClearClaudeCookies(useWebKit),
+  },
 }));
 
 jest.mock('expo-screen-orientation', () => ({
@@ -64,6 +77,7 @@ jest.mock('react-native-webview', () => {
     mockWebViewProps.push(props);
     ReactModule.useImperativeHandle(ref, () => ({
       injectJavaScript: (script: string) => mockInjectedScripts.push(script),
+      reload: () => mockReloadClaudeTransport(),
     }));
     return ReactModule.createElement(ReactNative.View, { testID: 'mock-webview' });
   });
@@ -125,6 +139,7 @@ async function connectClaude(utilization = 24): Promise<void> {
 
 beforeEach(() => {
   jest.useFakeTimers();
+  (Constants as { appOwnership: string | null }).appOwnership = 'expo';
   mockStorageValues.clear();
   mockInjectedScripts.length = 0;
   mockWebViewProps.length = 0;
@@ -135,6 +150,8 @@ beforeEach(() => {
     window: { fontScale: 1, height: 844, scale: 3, width: 390 },
   });
   mockClearCodexAuth.mockClear();
+  mockClearClaudeCookies.mockClear();
+  mockReloadClaudeTransport.mockClear();
   mockFetchCodexUsage.mockReset().mockRejectedValue(
     new (jest.requireActual('@/src/infrastructure/codexDeviceAuth').CodexAuthRequiredError)(),
   );
@@ -191,16 +208,30 @@ describe('UsageDashboard characterization', () => {
     expect(mockStorageValues.get('usage-monitor.last-provider.v1')).toBe('codex');
   });
 
-  it('renders remaining capacity after a successful Claude refresh', async () => {
+  it('shows used capacity prominently and remaining capacity in the portrait primary panel', async () => {
     mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: false }));
     await render(<UsageDashboard />);
     await settleEffects();
     await connectClaude(24);
 
-    expect(screen.getByText('76%')).toBeTruthy();
-    expect(screen.getByText('kvar')).toBeTruthy();
-    expect(screen.getByText('24% använt')).toBeTruthy();
+    expect(screen.getByText('24%')).toBeTruthy();
+    expect(screen.getByText('använt')).toBeTruthy();
+    expect(screen.getByText('76% kvar')).toBeTruthy();
     expect(screen.getByText('Claude · anslutet')).toBeTruthy();
+  });
+
+  it('reloads Claude’s transport after returning from Codex so the next refresh can complete', async () => {
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: true }));
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await connectClaude();
+    mockReloadClaudeTransport.mockClear();
+
+    await fireEvent.press(screen.getByText('Codex'));
+    await settleEffects();
+    await fireEvent.press(screen.getByText('Claude'));
+
+    expect(mockReloadClaudeTransport).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the latest capacity visible after a bridge error and offers recovery', async () => {
@@ -217,7 +248,7 @@ describe('UsageDashboard characterization', () => {
       });
     });
 
-    expect(screen.getByText('76%')).toBeTruthy();
+    expect(screen.getByText('24%')).toBeTruthy();
     expect(screen.getByText('Tillfälligt fel.')).toBeTruthy();
     expect(screen.getByText('Försök igen')).toBeTruthy();
   });
@@ -236,7 +267,7 @@ describe('UsageDashboard characterization', () => {
       });
     });
 
-    expect(screen.getByText('60%')).toBeTruthy();
+    expect(screen.getByText('40%')).toBeTruthy();
     expect(screen.getByText('Claude · inloggning krävs')).toBeTruthy();
     expect(screen.getByText('Logga in igen')).toBeTruthy();
   });
@@ -275,7 +306,12 @@ describe('UsageDashboard characterization', () => {
 
     expect(mockUnlockAsync).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText('Stäng monitor')).toBeTruthy();
-    expect(screen.getByText('90%')).toBeTruthy();
+    expect(screen.getByText('10%')).toBeTruthy();
+    expect(screen.getByText('använt')).toBeTruthy();
+    expect(screen.getByText('90% kvar').parent?.props.style).toMatchObject({
+      backgroundColor: 'rgba(9, 15, 20, 0.12)',
+      borderRadius: 999,
+    });
     expect(screen.queryByText('Claude · anslutet')).toBeNull();
   });
 
@@ -333,7 +369,7 @@ describe('UsageDashboard characterization', () => {
 
     await render(<UsageDashboard />);
     await settleEffects();
-    expect(screen.getByText('90%')).toBeTruthy();
+    expect(screen.getByText('10%')).toBeTruthy();
     await fireEvent.press(screen.getByText('Konto'));
     expect(screen.getByText('Codex är anslutet')).toBeTruthy();
 
@@ -346,6 +382,47 @@ describe('UsageDashboard characterization', () => {
 
     expect(mockClearCodexAuth).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Codex · inloggning krävs')).toBeTruthy();
+  });
+
+  it('uses Claude logout fallback in Expo Go without loading CookieManager', async () => {
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: false }));
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await connectClaude();
+    await fireEvent.press(screen.getByText('Konto'));
+    await fireEvent.press(screen.getByText('Koppla från Claude'));
+    const confirm = alert.mock.calls[0]?.[2]?.find((button) => button.style === 'destructive');
+    await act(async () => {
+      confirm?.onPress?.();
+      await Promise.resolve();
+    });
+
+    expect(mockClearClaudeCookies).not.toHaveBeenCalled();
+    expect(screen.getByText('Öppna profilmenyn i Claude och välj Log out. Appen upptäcker det automatiskt.')).toBeTruthy();
+  });
+
+  it('uses Claude logout fallback when a development build lacks CookieManager', async () => {
+    (Constants as { appOwnership: string | null }).appOwnership = null;
+    const nativeModuleCheck = jest.spyOn(TurboModuleRegistry, 'get').mockReturnValue(null);
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: false }));
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await connectClaude();
+    await fireEvent.press(screen.getByText('Konto'));
+    await fireEvent.press(screen.getByText('Koppla från Claude'));
+    const confirm = alert.mock.calls[0]?.[2]?.find((button) => button.style === 'destructive');
+    await act(async () => {
+      confirm?.onPress?.();
+      await Promise.resolve();
+    });
+
+    expect(nativeModuleCheck).toHaveBeenCalledWith('CookieManager');
+    expect(mockClearClaudeCookies).not.toHaveBeenCalled();
+    nativeModuleCheck.mockRestore();
   });
 
   it('times out a Claude request and ignores its late response', async () => {

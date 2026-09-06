@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
+import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { StatusBar } from 'expo-status-bar';
@@ -17,6 +18,7 @@ import {
   RefreshControl,
   ScrollView,
   Text,
+  TurboModuleRegistry,
   useColorScheme,
   useWindowDimensions,
   View,
@@ -320,6 +322,7 @@ export function UsageDashboard() {
 
   useEffect(() => {
     if (!connectionsHydrated) return;
+    if (activeProvider === 'claude' && isDisconnectingClaudeRef.current) return;
     if (!connectedProvidersRef.current[activeProvider]) {
       setNeedsSignInByProvider((current) => ({ ...current, [activeProvider]: true }));
       setIsRefreshing(false);
@@ -608,7 +611,10 @@ export function UsageDashboard() {
     dismissOpenBrowser();
     pendingRefreshRef.current = true;
     isWebReadyRef.current = false;
-    if (provider === 'claude') webViewProviderRef.current = provider;
+    if (provider === 'claude') {
+      webViewProviderRef.current = provider;
+      webViewRef.current?.reload();
+    }
     setIsRefreshing(false);
     setIsShowingLogin(false);
     setActiveProvider(provider);
@@ -640,6 +646,14 @@ export function UsageDashboard() {
                 if (activeProvider === 'codex') {
                   await clearCodexAuth();
                 } else {
+                  if (Constants.appOwnership === 'expo' || !TurboModuleRegistry.get('CookieManager')) {
+                    isDisconnectingClaudeRef.current = true;
+                    setIsShowingAccount(false);
+                    setLoginStatus('Öppna profilmenyn i Claude och välj Log out. Appen upptäcker det automatiskt.');
+                    setWebSourceURL(CLAUDE_HOME_URL);
+                    setIsShowingLogin(true);
+                    return;
+                  }
                   try {
                     const { default: CookieManager } = await import('@preeternal/react-native-cookie-manager');
                     await CookieManager.clearAll(true);
