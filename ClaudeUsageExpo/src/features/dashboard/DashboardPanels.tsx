@@ -2,7 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { useKeepAwake } from 'expo-keep-awake';
 import { SymbolView } from 'expo-symbols';
-import { ComponentProps } from 'react';
+import { ComponentProps, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -18,6 +18,15 @@ import {
   PROVIDER_META,
   PROVIDERS,
 } from '@/src/features/dashboard/dashboardModel';
+import {
+  getServiceStatusLabel,
+  ProviderStatuses,
+  ServiceCondition,
+} from '@/src/infrastructure/providerStatus';
+import {
+  buildHistoryBars,
+  UsageHistoryPoint,
+} from '@/src/infrastructure/usageHistory';
 
 type IOSSymbolName = Extract<ComponentProps<typeof SymbolView>['name'], string>;
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
@@ -321,4 +330,157 @@ export function UsageLimitRow({
       </Text>
     </View>
   );
+}
+
+export function UsageHistoryPanel({
+  points,
+  styles,
+}: {
+  points: UsageHistoryPoint[];
+  styles: DashboardStyles;
+}) {
+  const [period, setPeriod] = useState<'day' | 'week'>('day');
+  const hours = period === 'day' ? 24 : 7 * 24;
+  const [now] = useState(() => Date.now());
+  const visiblePoints = useMemo(
+    () => points.filter((point) => point.capturedAt >= now - hours * 60 * 60_000 && point.capturedAt <= now),
+    [hours, now, points],
+  );
+  const bars = useMemo(() => buildHistoryBars(points, hours, now), [hours, now, points]);
+  const latest = visiblePoints.at(-1)?.utilization ?? null;
+  const peak = visiblePoints.length > 0
+    ? Math.max(...visiblePoints.map((point) => point.utilization))
+    : null;
+
+  return (
+    <View style={styles.insightSection}>
+      <View style={styles.insightHeader}>
+        <Text style={styles.sectionTitle}>Användningshistorik</Text>
+        <View style={styles.historyPeriodSwitcher}>
+          {(['day', 'week'] as const).map((item) => {
+            const selected = item === period;
+            return (
+              <Pressable
+                key={item}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                onPress={() => setPeriod(item)}
+                style={({ pressed }) => [
+                  styles.historyPeriodOption,
+                  selected && styles.historyPeriodOptionActive,
+                  pressed && styles.pressed,
+                ]}>
+                <Text style={[styles.historyPeriodText, selected && styles.historyPeriodTextActive]}>
+                  {item === 'day' ? '24 h' : '7 dagar'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      <View style={styles.historyCard}>
+        {latest === null ? (
+          <View style={styles.historyEmpty}>
+            <Ionicons name="analytics-outline" size={24} color={styles.historyEmptyText.color} />
+            <Text style={styles.historyEmptyText}>Historiken byggs upp när appen uppdaterar.</Text>
+          </View>
+        ) : (
+          <>
+            <View
+              accessibilityLabel={`Användning under ${period === 'day' ? '24 timmar' : '7 dagar'}`}
+              style={styles.historyChart}>
+              {bars.map((value, index) => (
+                <View key={index} style={styles.historyBarSlot}>
+                  <View
+                    testID="history-bar"
+                    style={value === null
+                      ? styles.historyBarEmpty
+                      : [styles.historyBar, { height: `${Math.max(3, value)}%` }]}
+                  />
+                </View>
+              ))}
+            </View>
+            <View style={styles.historyAxis}>
+              <Text style={styles.historyAxisText}>{period === 'day' ? '24 timmar sedan' : '7 dagar sedan'}</Text>
+              <Text style={styles.historyAxisText}>Nu</Text>
+            </View>
+            <View style={styles.historySummary}>
+              <Text style={styles.historySummaryText}>{`Nu ${Math.round(latest)}%`}</Text>
+              <View style={styles.historySummaryDivider} />
+              <Text style={styles.historySummaryMuted}>{`Topp ${Math.round(peak ?? latest)}%`}</Text>
+            </View>
+          </>
+        )}
+      </View>
+    </View>
+  );
+}
+
+export function ServiceStatusPanel({
+  isRefreshing,
+  onRefresh,
+  statuses,
+  styles,
+}: {
+  isRefreshing: boolean;
+  onRefresh: () => void;
+  statuses: ProviderStatuses | null;
+  styles: DashboardStyles;
+}) {
+  return (
+    <View style={styles.insightSection}>
+      <View style={styles.insightHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>Driftstatus</Text>
+          <Text style={styles.insightCaption}>
+            {statuses ? `Kontrollerad ${formatRelativeTime(statuses.claude.checkedAt)}` : 'Kontrollerar tjänsterna…'}
+          </Text>
+        </View>
+        <Pressable
+          accessibilityLabel="Uppdatera driftstatus"
+          accessibilityRole="button"
+          accessibilityState={{ busy: isRefreshing, disabled: isRefreshing }}
+          disabled={isRefreshing}
+          onPress={onRefresh}
+          style={({ pressed }) => [styles.statusRefreshButton, pressed && styles.pressed]}>
+          {isRefreshing
+            ? <ActivityIndicator size="small" color={styles.statusRefreshIcon.color} />
+            : <Ionicons name="refresh" size={17} color={styles.statusRefreshIcon.color} />}
+        </Pressable>
+      </View>
+
+      <View style={styles.statusCard}>
+        {PROVIDERS.map((provider, index) => {
+          const condition = statuses?.[provider].condition ?? 'unavailable';
+          return (
+            <View key={provider}>
+              {index > 0 ? <View style={styles.divider} /> : null}
+              <View style={styles.statusRow}>
+                <View style={styles.statusProviderIdentity}>
+                  <View style={styles.statusLogoPlate}>
+                    <Image source={PROVIDER_LOGOS[provider]} style={styles.statusProviderLogo} contentFit="contain" accessible={false} />
+                  </View>
+                  <Text style={styles.statusProviderName}>{PROVIDER_META[provider].label}</Text>
+                </View>
+                <View style={styles.statusCondition}>
+                  <View style={[styles.statusConditionDot, { backgroundColor: serviceConditionColor(condition, styles) }]} />
+                  <Text style={styles.statusConditionText}>
+                    {statuses ? getServiceStatusLabel(condition) : 'Kontrollerar…'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function serviceConditionColor(condition: ServiceCondition, styles: DashboardStyles): string {
+  if (condition === 'operational') return styles.statusOperational.backgroundColor;
+  if (condition === 'outage') return styles.statusOutage.backgroundColor;
+  if (condition === 'degraded' || condition === 'maintenance') return styles.statusDegraded.backgroundColor;
+  return styles.statusUnavailable.backgroundColor;
 }

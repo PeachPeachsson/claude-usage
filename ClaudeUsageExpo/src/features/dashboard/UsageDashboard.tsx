@@ -31,6 +31,8 @@ import {
   LandscapeMonitor,
   PrimaryUsagePanel,
   ProviderSwitcher,
+  ServiceStatusPanel,
+  UsageHistoryPanel,
   UsageLimitRow,
 } from '@/src/features/dashboard/DashboardPanels';
 import {
@@ -73,12 +75,25 @@ import {
   pollCodexDeviceAuthorization,
   requestCodexDeviceAuthorization,
 } from '@/src/infrastructure/codexDeviceAuth';
+import {
+  fetchProviderStatuses,
+  ProviderStatuses,
+} from '@/src/infrastructure/providerStatus';
+import {
+  createEmptyUsageHistory,
+  mergeUsageSnapshot,
+  parseUsageHistory,
+  saveUsageHistory,
+  UsageHistory,
+  USAGE_HISTORY_STORAGE_KEY,
+} from '@/src/infrastructure/usageHistory';
 
 const SAFARI_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 const GOOGLE_LOGIN_UNAVAILABLE =
   'Google tillåter inte den här inbäddade inloggningen. Använd e-post eller Fortsätt med Apple.';
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
+const STATUS_REFRESH_INTERVAL_MS = 5 * 60_000;
 const CONNECTION_STORAGE_KEY = 'usage-monitor.connected-providers.v1';
 const LAST_PROVIDER_STORAGE_KEY = 'usage-monitor.last-provider.v1';
 const REFRESH_HINT_STORAGE_KEY = 'usage-monitor.refresh-hint-seen.v1';
@@ -138,8 +153,12 @@ export function UsageDashboard() {
   const codexRefreshInFlightRef = useRef(false);
   const codexLoginGenerationRef = useRef(0);
   const isDisconnectingClaudeRef = useRef(false);
+  const statusRefreshInFlightRef = useRef(false);
 
   const [snapshots, setSnapshots] = useState<ProviderRecord<UsageSnapshot | null>>({ claude: null, codex: null });
+  const [usageHistory, setUsageHistory] = useState<UsageHistory>(() => createEmptyUsageHistory());
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatuses | null>(null);
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [connectionsHydrated, setConnectionsHydrated] = useState(false);
   const [needsSignInByProvider, setNeedsSignInByProvider] = useState<ProviderRecord<boolean>>({ claude: true, codex: true });
@@ -198,6 +217,26 @@ export function UsageDashboard() {
     void AsyncStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(connectedProvidersRef.current));
   }, []);
 
+  const recordUsageSnapshot = useCallback((provider: UsageProvider, nextSnapshot: UsageSnapshot) => {
+    setUsageHistory((current) => {
+      const next = mergeUsageSnapshot(current, provider, nextSnapshot);
+      void saveUsageHistory(next);
+      return next;
+    });
+  }, []);
+
+  const refreshServiceStatus = useCallback(async () => {
+    if (statusRefreshInFlightRef.current) return;
+    statusRefreshInFlightRef.current = true;
+    setIsRefreshingStatus(true);
+    try {
+      setProviderStatuses(await fetchProviderStatuses());
+    } finally {
+      statusRefreshInFlightRef.current = false;
+      setIsRefreshingStatus(false);
+    }
+  }, []);
+
   const refreshCodexProvider = useCallback(async () => {
     if (codexRefreshInFlightRef.current) return;
     codexRefreshInFlightRef.current = true;
@@ -210,6 +249,7 @@ export function UsageDashboard() {
       const body = await fetchCodexUsageWithStoredAuth();
       const nextSnapshot = parseCodexUsagePayload(body);
       setSnapshots((current) => ({ ...current, codex: nextSnapshot }));
+      recordUsageSnapshot('codex', nextSnapshot);
       setNeedsSignInByProvider((current) => ({ ...current, codex: false }));
       persistProviderConnection('codex', true);
       setLoginStatus('Klart — Codex-kontot är anslutet.');
@@ -225,7 +265,7 @@ export function UsageDashboard() {
       codexRefreshInFlightRef.current = false;
       setIsRefreshing(false);
     }
-  }, [persistProviderConnection]);
+  }, [persistProviderConnection, recordUsageSnapshot]);
 
   const refreshProvider = useCallback((provider: UsageProvider) => {
     if (requestIdRef.current) return;
@@ -278,7 +318,12 @@ export function UsageDashboard() {
   useEffect(() => {
     let cancelled = false;
 
-    void AsyncStorage.multiGet([CONNECTION_STORAGE_KEY, LAST_PROVIDER_STORAGE_KEY, REFRESH_HINT_STORAGE_KEY])
+    void AsyncStorage.multiGet([
+      CONNECTION_STORAGE_KEY,
+      LAST_PROVIDER_STORAGE_KEY,
+      REFRESH_HINT_STORAGE_KEY,
+      USAGE_HISTORY_STORAGE_KEY,
+    ])
       .then((entries) => {
         if (cancelled) return;
         const storedValue = entries[0]?.[1] ?? null;
@@ -294,6 +339,7 @@ export function UsageDashboard() {
         const storedProvider = entries[1]?.[1] ?? null;
         if (storedProvider === 'claude' || storedProvider === 'codex') setActiveProvider(storedProvider);
         setShowRefreshHint(entries[2]?.[1] !== 'true');
+        setUsageHistory(parseUsageHistory(entries[3]?.[1] ?? null));
       })
       .catch(() => {
         if (cancelled) return;
@@ -309,6 +355,12 @@ export function UsageDashboard() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    void refreshServiceStatus();
+    const interval = setInterval(() => void refreshServiceStatus(), STATUS_REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [refreshServiceStatus]);
 
   const refresh = useCallback((silent = false) => {
     if (!silent) {
@@ -473,6 +525,7 @@ export function UsageDashboard() {
       try {
         const nextSnapshot = parseUsagePayload(message.body);
         setSnapshots((current) => ({ ...current, [provider]: nextSnapshot }));
+        recordUsageSnapshot(provider, nextSnapshot);
         persistProviderConnection(provider, true);
         setNeedsSignInByProvider((current) => ({ ...current, [provider]: false }));
         setErrorMessages((current) => ({ ...current, [provider]: null }));
@@ -489,7 +542,7 @@ export function UsageDashboard() {
         setLoginStatus(text);
       }
     },
-    [clearRequestTimeout, isShowingLogin, persistProviderConnection, snapshots],
+    [clearRequestTimeout, isShowingLogin, persistProviderConnection, recordUsageSnapshot, snapshots],
   );
 
   const openCodexDevicePage = useCallback((authorization = codexLogin?.authorization) => {
@@ -808,6 +861,8 @@ export function UsageDashboard() {
                 </View>
               ) : null}
 
+              <UsageHistoryPanel points={usageHistory[activeProvider]} styles={styles} />
+
               <View style={styles.freshnessRow}>
                 <View style={styles.freshnessCopy}>
                   <View style={styles.freshnessTitleRow}>
@@ -903,6 +958,13 @@ export function UsageDashboard() {
               </View>
             </View>
           )}
+
+          <ServiceStatusPanel
+            isRefreshing={isRefreshingStatus}
+            onRefresh={() => void refreshServiceStatus()}
+            statuses={providerStatuses}
+            styles={styles}
+          />
 
           {errorMessage && snapshot ? (
             <View accessibilityLiveRegion="polite" style={styles.errorCard}>

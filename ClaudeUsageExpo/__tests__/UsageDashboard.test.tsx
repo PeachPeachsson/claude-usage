@@ -15,6 +15,7 @@ const mockClearClaudeCookies = jest.fn<Promise<boolean>, [boolean?]>(async () =>
 const mockFetchCodexUsage = jest.fn<Promise<string>, []>();
 const mockReloadClaudeTransport = jest.fn();
 const mockPollCodexAuthorization = jest.fn<Promise<null>, [unknown]>(async () => null);
+const mockFetchProviderStatuses = jest.fn();
 const mockRequestCodexAuthorization = jest.fn(async () => ({
   deviceAuthId: 'device-dashboard',
   expiresAt: new Date(Date.now() + 15 * 60_000),
@@ -96,6 +97,14 @@ jest.mock('@/src/infrastructure/codexDeviceAuth', () => {
   };
 });
 
+jest.mock('@/src/infrastructure/providerStatus', () => {
+  const actual = jest.requireActual('@/src/infrastructure/providerStatus');
+  return {
+    ...actual,
+    fetchProviderStatuses: () => mockFetchProviderStatuses(),
+  };
+});
+
 function latestWebViewProps(): Record<string, any> {
   const props = mockWebViewProps.at(-1);
   if (!props) throw new Error('No WebView rendered');
@@ -157,6 +166,10 @@ beforeEach(() => {
   );
   mockPollCodexAuthorization.mockClear().mockImplementation(() => new Promise(() => undefined));
   mockRequestCodexAuthorization.mockClear();
+  mockFetchProviderStatuses.mockReset().mockResolvedValue({
+    claude: { checkedAt: new Date('2026-09-07T08:00:00.000Z'), condition: 'operational' },
+    codex: { checkedAt: new Date('2026-09-07T08:00:00.000Z'), condition: 'degraded' },
+  });
 });
 
 afterEach(() => {
@@ -201,7 +214,7 @@ describe('UsageDashboard characterization', () => {
     await render(<UsageDashboard />);
     await settleEffects();
 
-    await fireEvent.press(screen.getByText('Codex'));
+    await fireEvent.press(screen.getByLabelText('Visa gränser för Codex'));
 
     expect(screen.getByText('Codex · inloggning krävs')).toBeTruthy();
     expect(screen.getByText('Fortsätt med OpenAI')).toBeTruthy();
@@ -220,6 +233,29 @@ describe('UsageDashboard characterization', () => {
     expect(screen.getByText('Claude · anslutet')).toBeTruthy();
   });
 
+  it('records successful refreshes and presents local usage history', async () => {
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: false }));
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await connectClaude(38);
+
+    expect(screen.getByText('Användningshistorik')).toBeTruthy();
+    expect(screen.getByText('24 h')).toBeTruthy();
+    expect(screen.getByText('7 dagar')).toBeTruthy();
+    expect(screen.getByText('Nu 38%')).toBeTruthy();
+    expect(mockStorageValues.get('usage-monitor.history.v1')).toContain('"utilization":38');
+  });
+
+  it('shows independent service health for Claude and Codex', async () => {
+    await render(<UsageDashboard />);
+    await settleEffects();
+
+    expect(screen.getByText('Driftstatus')).toBeTruthy();
+    expect(screen.getByText('Alla system fungerar')).toBeTruthy();
+    expect(screen.getByText('Begränsad drift')).toBeTruthy();
+    expect(mockFetchProviderStatuses).toHaveBeenCalledTimes(1);
+  });
+
   it('reloads Claude’s transport after returning from Codex so the next refresh can complete', async () => {
     mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: true }));
     await render(<UsageDashboard />);
@@ -227,9 +263,9 @@ describe('UsageDashboard characterization', () => {
     await connectClaude();
     mockReloadClaudeTransport.mockClear();
 
-    await fireEvent.press(screen.getByText('Codex'));
+    await fireEvent.press(screen.getByLabelText('Visa gränser för Codex'));
     await settleEffects();
-    await fireEvent.press(screen.getByText('Claude'));
+    await fireEvent.press(screen.getByLabelText('Visa gränser för Claude'));
 
     expect(mockReloadClaudeTransport).toHaveBeenCalledTimes(1);
   });
@@ -348,7 +384,7 @@ describe('UsageDashboard characterization', () => {
   it('shows the OpenAI device code after starting Codex login', async () => {
     await render(<UsageDashboard />);
     await settleEffects();
-    await fireEvent.press(screen.getByText('Codex'));
+    await fireEvent.press(screen.getByLabelText('Visa gränser för Codex'));
     await fireEvent.press(screen.getByText('Fortsätt med OpenAI'));
     await settleEffects();
 
