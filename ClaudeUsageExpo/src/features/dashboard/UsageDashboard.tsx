@@ -782,6 +782,7 @@ export function UsageDashboard() {
       {isMonitorMode && snapshot && primaryWindow ? (
         <LandscapeMonitor
           activeProvider={activeProvider}
+          historyPoints={usageHistory[activeProvider]}
           isCompact={width < 760}
           isRefreshing={isRefreshing}
           onExit={exitMonitorMode}
@@ -789,6 +790,7 @@ export function UsageDashboard() {
           onSelectProvider={selectProvider}
           primaryWindow={primaryWindow}
           providerAccentInk={providerTheme.monitorAccentInk}
+          reduceMotion={reduceMotion}
           secondaryWindows={secondaryWindows}
           snapshot={snapshot}
           styles={styles}

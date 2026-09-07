@@ -2,8 +2,17 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { useKeepAwake } from 'expo-keep-awake';
 import { SymbolView } from 'expo-symbols';
-import { ComponentProps, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ComponentProps, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Easing,
+  GestureResponderEvent,
+  Pressable,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { UsageSnapshot, UsageWindow } from '@/src/domain/usage';
@@ -15,8 +24,13 @@ import {
   formatReset,
   formatWindowTitle,
   getUsageTint,
+  neighbourProvider,
+  nextHistoryReveal,
   PROVIDER_META,
   PROVIDERS,
+  providerForSwipe,
+  REVEAL_CLAIM_DISTANCE,
+  SWIPE_CLAIM_DISTANCE,
 } from '@/src/features/dashboard/dashboardModel';
 import {
   getServiceStatusLabel,
@@ -89,7 +103,15 @@ export function ProviderSwitcher({
             ]}>
             <Image
               source={PROVIDER_LOGOS[provider]}
-              style={isMonitor ? styles.monitorProviderLogo : styles.providerLogo}
+              style={
+                provider === 'codex'
+                  ? isMonitor
+                    ? styles.monitorProviderLogoCodex
+                    : styles.providerLogoCodex
+                  : isMonitor
+                    ? styles.monitorProviderLogo
+                    : styles.providerLogo
+              }
               contentFit="contain"
               tintColor={selected ? selectedLabelStyle.color : labelStyle.color}
               accessible={false}
@@ -107,6 +129,7 @@ export function ProviderSwitcher({
 
 export function LandscapeMonitor({
   activeProvider,
+  historyPoints,
   isCompact,
   isRefreshing,
   onExit,
@@ -114,11 +137,13 @@ export function LandscapeMonitor({
   onSelectProvider,
   primaryWindow,
   providerAccentInk,
+  reduceMotion,
   secondaryWindows,
   snapshot,
   styles,
 }: {
   activeProvider: UsageProvider;
+  historyPoints: UsageHistoryPoint[];
   isCompact: boolean;
   isRefreshing: boolean;
   onExit: () => void;
@@ -126,18 +151,119 @@ export function LandscapeMonitor({
   onSelectProvider: (provider: UsageProvider) => void;
   primaryWindow: UsageWindow;
   providerAccentInk: string;
+  reduceMotion: boolean;
   secondaryWindows: UsageWindow[];
   snapshot: UsageSnapshot;
   styles: DashboardStyles;
 }) {
   useKeepAwake('usage-monitor');
 
+  const { width } = useWindowDimensions();
+  // How far the panels travel: the finger is followed at less than 1:1 so the drag feels weighted,
+  // and a swipe with no provider on the other side barely moves at all — the resistance is the
+  // feedback that there is nothing to switch to.
+  const followDistance = Math.min(width * 0.16, 132);
+  const slideDistance = Math.min(width * 0.2, 168);
+
+  // The drag origin lives in a ref rather than in the handlers' closures, so the monitor can
+  // re-render mid-gesture — the relative timestamp ticks and refreshes land while a finger is
+  // down — without losing where the swipe started. The handlers themselves are read at dispatch
+  // time, so they always see the current provider.
+  const swipeOrigin = useRef<{ x: number; y: number; at: number } | null>(null);
+  const [panelOffset] = useState(() => new Animated.Value(0));
+  const [panelOpacity] = useState(() => new Animated.Value(1));
+
+  const settlePanels = () => {
+    Animated.parallel([
+      Animated.spring(panelOffset, { toValue: 0, friction: 9, tension: 90, useNativeDriver: true }),
+      Animated.timing(panelOpacity, { toValue: 1, duration: 160, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const beginSwipe = (event: GestureResponderEvent) => {
+    swipeOrigin.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY, at: Date.now() };
+    panelOffset.stopAnimation();
+    panelOpacity.stopAnimation();
+  };
+
+  // Claiming only once the finger has travelled sideways leaves taps to the buttons underneath.
+  const claimSwipe = (event: GestureResponderEvent) => {
+    const origin = swipeOrigin.current;
+    if (!origin) return false;
+    const dx = event.nativeEvent.pageX - origin.x;
+    const dy = event.nativeEvent.pageY - origin.y;
+    return Math.abs(dx) > SWIPE_CLAIM_DISTANCE && Math.abs(dx) > Math.abs(dy);
+  };
+
+  const followSwipe = (event: GestureResponderEvent) => {
+    const origin = swipeOrigin.current;
+    if (!origin || reduceMotion) return;
+    const dx = event.nativeEvent.pageX - origin.x;
+    const resistance = neighbourProvider(activeProvider, dx) ? 0.5 : 0.12;
+    const travel = Math.min(followDistance, Math.abs(dx) * resistance) * Math.sign(dx);
+    panelOffset.setValue(travel);
+    panelOpacity.setValue(1 - (Math.abs(travel) / followDistance) * 0.4);
+  };
+
+  const endSwipe = (event: GestureResponderEvent) => {
+    const origin = swipeOrigin.current;
+    swipeOrigin.current = null;
+    if (!origin) return;
+
+    const dx = event.nativeEvent.pageX - origin.x;
+    const dy = event.nativeEvent.pageY - origin.y;
+    const next = providerForSwipe(activeProvider, { dx, dy, vx: dx / Math.max(1, Date.now() - origin.at) });
+    if (!next) {
+      settlePanels();
+      return;
+    }
+
+    if (reduceMotion) {
+      onSelectProvider(next);
+      return;
+    }
+
+    // Carry the drag through: the outgoing panels keep going the way the finger was heading, then
+    // the incoming ones arrive from the opposite edge. The provider only changes between the two
+    // halves, while the panels are invisible, so the swap itself is never seen.
+    const exit = dx < 0 ? -1 : 1;
+    Animated.parallel([
+      Animated.timing(panelOffset, {
+        toValue: exit * slideDistance,
+        duration: 140,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(panelOpacity, { toValue: 0, duration: 140, useNativeDriver: true }),
+    ]).start(() => {
+      onSelectProvider(next);
+      panelOffset.setValue(-exit * slideDistance);
+      Animated.parallel([
+        Animated.spring(panelOffset, { toValue: 0, friction: 9, tension: 80, useNativeDriver: true }),
+        Animated.timing(panelOpacity, { toValue: 1, duration: 240, useNativeDriver: true }),
+      ]).start();
+    });
+  };
+
+  const cancelSwipe = () => {
+    swipeOrigin.current = null;
+    settlePanels();
+  };
+
   const utilization = Math.round(primaryWindow.utilization);
   const remaining = Math.max(0, 100 - utilization);
 
   return (
     <SafeAreaView style={styles.monitorSafeArea} edges={['top', 'bottom', 'left', 'right']}>
-      <View style={styles.monitorShell}>
+      <View
+        accessibilityHint="Dra i sidled för att byta mellan Claude och Codex."
+        onMoveShouldSetResponder={claimSwipe}
+        onResponderMove={followSwipe}
+        onResponderRelease={endSwipe}
+        onResponderTerminate={cancelSwipe}
+        onTouchStart={beginSwipe}
+        style={styles.monitorShell}
+        testID="monitor-swipe-area">
         <View style={styles.monitorHeader}>
           <View style={styles.monitorIdentity}>
             <Text style={styles.monitorBrand}>Usage</Text>
@@ -184,7 +310,9 @@ export function LandscapeMonitor({
           </View>
         </View>
 
-        <View style={styles.monitorBody}>
+        <Animated.View
+          style={[styles.monitorBody, { opacity: panelOpacity, transform: [{ translateX: panelOffset }] }]}
+          testID="monitor-swipe-panels">
           <View style={styles.monitorPrimary}>
             <View style={styles.monitorPrimaryHeader}>
               <Text style={styles.monitorPrimaryTitle}>{formatMonitorTitle(primaryWindow)}</Text>
@@ -215,18 +343,199 @@ export function LandscapeMonitor({
           </View>
 
           {secondaryWindows.length > 0 ? (
-            <View style={styles.monitorSecondaryPanel}>
-              {secondaryWindows.map((window, index) => (
-                <View key={window.id} style={styles.monitorLimitSlot}>
-                  {index > 0 ? <View style={styles.monitorDivider} /> : null}
-                  <MonitorLimitRow isOnly={secondaryWindows.length === 1} styles={styles} window={window} />
-                </View>
-              ))}
-            </View>
+            <MonitorSecondaryPanel
+              historyPoints={historyPoints}
+              // The window ends at the last fetch rather than at mount, so it keeps up with each
+              // refresh instead of going stale while the monitor is kept awake for hours.
+              now={snapshot.fetchedAt.getTime()}
+              reduceMotion={reduceMotion}
+              secondaryWindows={secondaryWindows}
+              styles={styles}
+            />
           ) : null}
-        </View>
+        </Animated.View>
       </View>
     </SafeAreaView>
+  );
+}
+
+// The right-hand panel holds two faces: the remaining limits, and the usage history behind them.
+// Swiping up lifts the history into view, swiping down puts the limits back, and the handle at the
+// bottom does the same on a tap so the history is reachable without knowing about the gesture.
+function MonitorSecondaryPanel({
+  historyPoints,
+  now,
+  reduceMotion,
+  secondaryWindows,
+  styles,
+}: {
+  historyPoints: UsageHistoryPoint[];
+  now: number;
+  reduceMotion: boolean;
+  secondaryWindows: UsageWindow[];
+  styles: DashboardStyles;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  const [faceHeight, setFaceHeight] = useState(0);
+  const [reveal] = useState(() => new Animated.Value(0));
+  const dragOrigin = useRef<{ x: number; y: number; at: number; from: number } | null>(null);
+
+  const settleTo = (next: boolean) => {
+    setRevealed(next);
+    if (reduceMotion) {
+      reveal.setValue(next ? 1 : 0);
+      return;
+    }
+    Animated.spring(reveal, { toValue: next ? 1 : 0, friction: 11, tension: 80, useNativeDriver: true }).start();
+  };
+
+  const beginReveal = (event: GestureResponderEvent) => {
+    dragOrigin.current = {
+      x: event.nativeEvent.pageX,
+      y: event.nativeEvent.pageY,
+      at: Date.now(),
+      from: revealed ? 1 : 0,
+    };
+    reveal.stopAnimation();
+  };
+
+  // Claiming only on vertical travel leaves sideways drags to the provider swipe on the shell.
+  const claimReveal = (event: GestureResponderEvent) => {
+    const origin = dragOrigin.current;
+    if (!origin) return false;
+    const dx = event.nativeEvent.pageX - origin.x;
+    const dy = event.nativeEvent.pageY - origin.y;
+    return Math.abs(dy) > REVEAL_CLAIM_DISTANCE && Math.abs(dy) > Math.abs(dx);
+  };
+
+  const followReveal = (event: GestureResponderEvent) => {
+    const origin = dragOrigin.current;
+    if (!origin || reduceMotion || faceHeight <= 0) return;
+    const dy = event.nativeEvent.pageY - origin.y;
+    reveal.setValue(Math.max(0, Math.min(1, origin.from - dy / faceHeight)));
+  };
+
+  const endReveal = (event: GestureResponderEvent) => {
+    const origin = dragOrigin.current;
+    dragOrigin.current = null;
+    if (!origin) return;
+    const dx = event.nativeEvent.pageX - origin.x;
+    const dy = event.nativeEvent.pageY - origin.y;
+    const vy = dy / Math.max(1, Date.now() - origin.at);
+    settleTo(nextHistoryReveal(origin.from === 1, { dx, dy, vy }, faceHeight));
+  };
+
+  const cancelReveal = () => {
+    const origin = dragOrigin.current;
+    dragOrigin.current = null;
+    settleTo(origin ? origin.from === 1 : revealed);
+  };
+
+  const limitsOffset = reveal.interpolate({ inputRange: [0, 1], outputRange: [0, -faceHeight] });
+  const historyOffset = reveal.interpolate({ inputRange: [0, 1], outputRange: [faceHeight, 0] });
+
+  return (
+    <View
+      onMoveShouldSetResponder={claimReveal}
+      onResponderMove={followReveal}
+      onResponderRelease={endReveal}
+      onResponderTerminate={cancelReveal}
+      onTouchStart={beginReveal}
+      style={styles.monitorSecondaryPanel}
+      testID="monitor-history-reveal">
+      <View
+        onLayout={(event) => setFaceHeight(event.nativeEvent.layout.height)}
+        style={styles.monitorSecondaryFaces}
+        testID="monitor-secondary-faces">
+        <Animated.View
+          style={[styles.monitorSecondaryFace, { transform: [{ translateY: limitsOffset }] }]}
+          testID="monitor-limits-face">
+          {secondaryWindows.map((window, index) => (
+            <View key={window.id} style={styles.monitorLimitSlot}>
+              {index > 0 ? <View style={styles.monitorDivider} /> : null}
+              <MonitorLimitRow isOnly={secondaryWindows.length === 1} styles={styles} window={window} />
+            </View>
+          ))}
+        </Animated.View>
+
+        {faceHeight > 0 ? (
+          <Animated.View
+            style={[styles.monitorSecondaryFace, { transform: [{ translateY: historyOffset }] }]}
+            testID="monitor-history-face">
+            <MonitorHistoryFace now={now} points={historyPoints} styles={styles} />
+          </Animated.View>
+        ) : null}
+      </View>
+
+      <Pressable
+        accessibilityLabel={revealed ? 'Visa gränser' : 'Visa användningshistorik'}
+        accessibilityHint="Dra uppåt för historik, nedåt för gränser."
+        accessibilityRole="button"
+        onPress={() => settleTo(!revealed)}
+        style={({ pressed }) => [styles.monitorSecondaryHandle, pressed && styles.monitorPressed]}>
+        <AppSymbol
+          color={styles.monitorSecondaryHandleText.color}
+          fallback={revealed ? 'chevron-down' : 'chevron-up'}
+          name={revealed ? 'chevron.down' : 'chevron.up'}
+          size={12}
+        />
+        <Text style={styles.monitorSecondaryHandleText}>{revealed ? 'Gränser' : 'Historik'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function MonitorHistoryFace({
+  now,
+  points,
+  styles,
+}: {
+  now: number;
+  points: UsageHistoryPoint[];
+  styles: DashboardStyles;
+}) {
+
+  const bars = useMemo(() => buildHistoryBars(points, 24, now), [now, points]);
+  const visible = useMemo(
+    () => points.filter((point) => point.capturedAt >= now - 24 * 60 * 60_000 && point.capturedAt <= now),
+    [now, points],
+  );
+  const latest = visible.at(-1)?.utilization ?? null;
+  const peak = visible.length > 0 ? Math.max(...visible.map((point) => point.utilization)) : null;
+
+  if (latest === null) {
+    return (
+      <View style={styles.monitorHistoryEmpty}>
+        <Ionicons name="analytics-outline" size={26} color={styles.monitorHistoryEmptyText.color} />
+        <Text style={styles.monitorHistoryEmptyText}>Historiken byggs upp när appen uppdaterar.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.monitorHistoryFace}>
+      <View style={styles.monitorHistoryHeader}>
+        <Text numberOfLines={1} style={styles.monitorHistoryTitle}>Användningshistorik</Text>
+        <Text style={styles.monitorHistoryRange}>24 h</Text>
+      </View>
+      <View accessibilityLabel="Användning under 24 timmar" style={styles.monitorHistoryChart}>
+        {bars.map((value, index) => (
+          <View key={index} style={styles.monitorHistoryBarSlot}>
+            <View
+              testID="monitor-history-bar"
+              style={value === null
+                ? styles.monitorHistoryBarEmpty
+                : [styles.monitorHistoryBar, { height: `${Math.max(3, value)}%` }]}
+            />
+          </View>
+        ))}
+      </View>
+      <View style={styles.monitorHistorySummary}>
+        <Text style={styles.monitorHistorySummaryText}>{`Nu ${Math.round(latest)}%`}</Text>
+        <View style={styles.monitorHistorySummaryDivider} />
+        <Text style={styles.monitorHistorySummaryMuted}>{`Topp ${Math.round(peak ?? latest)}%`}</Text>
+      </View>
+    </View>
   );
 }
 
