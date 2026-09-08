@@ -35,6 +35,12 @@
           }
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Kapacitet behöver läsa dina bilder för att du ska kunna välja en egen bakgrund. Bilden stannar på enheten."
+        }
+      ],
       "expo-secure-store",
       "expo-font",
       "expo-image",

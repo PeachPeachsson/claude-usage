@@ -107,10 +107,11 @@ export const GLASS_TOKENS: GlassTokens = {
 };
 
 /**
- * 'unsplash' is not a preset: it means the backdrop is whatever photo the user picked from
- * Unsplash, whose URL and credit live alongside this id rather than in the preset list.
+ * Two choices are not presets. 'unsplash' means the backdrop is a photo picked from their
+ * library, whose URL and credit live alongside this id; 'custom' means one from the phone's
+ * own photos, stored as a file path. Neither belongs in the preset list.
  */
-export type BackgroundChoice = BackgroundId | 'unsplash';
+export type BackgroundChoice = BackgroundId | 'unsplash' | 'custom';
 
 export type BackgroundId =
   | 'topographic'
@@ -186,7 +187,7 @@ export function isBackgroundId(value: unknown): value is BackgroundId {
 }
 
 export function isBackgroundChoice(value: unknown): value is BackgroundChoice {
-  return value === 'unsplash' || isBackgroundId(value);
+  return value === 'unsplash' || value === 'custom' || isBackgroundId(value);
 }
 
 /**
@@ -194,7 +195,8 @@ export function isBackgroundChoice(value: unknown): value is BackgroundChoice {
  * what keeps the contrast budget valid for a library the app has never seen.
  */
 export function isPhotoBackdrop(choice: BackgroundChoice): boolean {
-  return choice === 'unsplash' || isImageBackground(choice);
+  if (choice === 'unsplash' || choice === 'custom') return true;
+  return isImageBackground(choice);
 }
 
 /**

@@ -2,7 +2,9 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
+import { File, Paths } from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -129,6 +131,9 @@ const REFRESH_HINT_STORAGE_KEY = 'usage-monitor.refresh-hint-seen.v1';
 const APPEARANCE_STORAGE_KEY = 'usage-monitor.appearance.v1';
 const BACKGROUND_STORAGE_KEY = 'usage-monitor.background.v1';
 const UNSPLASH_PHOTO_STORAGE_KEY = 'usage-monitor.unsplash-photo.v1';
+const CUSTOM_BACKGROUND_STORAGE_KEY = 'usage-monitor.custom-background.v1';
+/** Kept out of the cache directory so the system cannot reclaim the picked photo. */
+const CUSTOM_BACKGROUND_FILE_NAME = 'glass-background';
 
 const THEME_CHOICES: { id: ThemeChoice; label: string; note: string }[] = [
   { id: 'glass', label: 'Glas', note: 'Frostade ytor över en bakgrund' },
@@ -183,6 +188,8 @@ export function UsageDashboard() {
   const [unsplashResults, setUnsplashResults] = useState<UnsplashPhoto[]>([]);
   const [unsplashError, setUnsplashError] = useState<UnsplashFailure | null>(null);
   const [isSearchingUnsplash, setIsSearchingUnsplash] = useState(false);
+  const [customBackgroundUri, setCustomBackgroundUri] = useState<string | null>(null);
+  const [customBackgroundError, setCustomBackgroundError] = useState<string | null>(null);
   // Read once: whether search is configured decides what the section offers at all,
   // rather than leaving a dead search field for someone to discover by pressing it.
   const hasUnsplashKey = readAccessKey() !== null;
@@ -388,6 +395,7 @@ export function UsageDashboard() {
       APPEARANCE_STORAGE_KEY,
       BACKGROUND_STORAGE_KEY,
       UNSPLASH_PHOTO_STORAGE_KEY,
+      CUSTOM_BACKGROUND_STORAGE_KEY,
     ])
       .then((entries) => {
         if (cancelled) return;
@@ -412,6 +420,8 @@ export function UsageDashboard() {
         if (isThemeChoice(storedTheme)) setThemeChoice(storedTheme);
         const storedBackground = entries[5]?.[1] ?? null;
         if (isBackgroundChoice(storedBackground)) setBackgroundId(storedBackground);
+        const storedCustom = entries[7]?.[1] ?? null;
+        if (storedCustom) setCustomBackgroundUri(storedCustom);
         const storedPhoto = entries[6]?.[1] ?? null;
         if (storedPhoto) {
           try {
@@ -823,6 +833,41 @@ export function UsageDashboard() {
     void AsyncStorage.setItem(BACKGROUND_STORAGE_KEY, id);
   }, []);
 
+  const pickCustomBackground = useCallback(async () => {
+    setCustomBackgroundError(null);
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setCustomBackgroundError('Appen fick inte läsa dina bilder. Ge behörighet i systeminställningarna.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.9 });
+    if (result.canceled || result.assets.length === 0) return;
+    const picked = result.assets[0];
+    if (!picked) return;
+
+    try {
+      // The picker hands back a cache path the system may reclaim, so the file is copied
+      // into the document directory and the stored path points at that copy instead.
+      const source = new File(picked.uri);
+      const destination = new File(
+        Paths.document,
+        `${CUSTOM_BACKGROUND_FILE_NAME}${source.extension || '.jpg'}`,
+      );
+      if (destination.exists) destination.delete();
+      source.copy(destination);
+
+      setCustomBackgroundUri(destination.uri);
+      setBackgroundId('custom');
+      void Haptics.selectionAsync();
+      void AsyncStorage.setItem(CUSTOM_BACKGROUND_STORAGE_KEY, destination.uri);
+      void AsyncStorage.setItem(BACKGROUND_STORAGE_KEY, 'custom');
+    } catch {
+      setCustomBackgroundError('Bilden kunde inte sparas. Försök med en annan bild.');
+    }
+  }, []);
+
   const runUnsplashSearch = useCallback(async (query: string) => {
     setIsSearchingUnsplash(true);
     setUnsplashError(null);
@@ -940,6 +985,7 @@ export function UsageDashboard() {
         {isGlass ? (
           <AppBackground
             choice={backgroundId}
+            customUri={customBackgroundUri}
             remoteUrl={unsplashPhoto?.imageUrl ?? null}
             targetRef={blurTargetRef}>
             <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
@@ -1358,6 +1404,42 @@ export function UsageDashboard() {
                 <View style={styles.limitsSection}>
                   <Text style={styles.sectionTitle}>Bakgrund</Text>
                   <View style={styles.statusCard}>
+                    <Pressable
+                      accessibilityLabel="Välj en egen bild som bakgrund"
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: backgroundId === 'custom' }}
+                      onPress={() => void pickCustomBackground()}
+                      style={({ pressed }) => [styles.appearanceRow, pressed && styles.pressed]}>
+                      {backgroundId === 'custom' && customBackgroundUri ? (
+                        <Image
+                          accessible={false}
+                          contentFit="cover"
+                          source={{ uri: customBackgroundUri }}
+                          style={styles.backgroundSwatch}
+                        />
+                      ) : (
+                        <View style={[styles.backgroundSwatch, styles.backgroundSwatchEmpty]}>
+                          <Ionicons name="image-outline" size={18} color={palette.secondary} />
+                        </View>
+                      )}
+                      <View style={styles.appearanceRowCopy}>
+                        <Text style={styles.appearanceRowLabel}>Egen bild</Text>
+                        <Text style={styles.appearanceRowNote}>
+                          {backgroundId === 'custom' ? 'Vald, tryck för att byta' : 'Välj från dina bilder'}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={backgroundId === 'custom' ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={23}
+                        color={backgroundId === 'custom' ? palette.accent : palette.line}
+                      />
+                    </Pressable>
+                    {customBackgroundError ? (
+                      <Text style={[styles.unsplashNote, styles.appearanceRowInset]}>
+                        {customBackgroundError}
+                      </Text>
+                    ) : null}
+                    <View style={styles.divider} />
                     {BUILT_IN_BACKGROUNDS.map((background, index) => (
                       <View key={background.id}>
                         {index > 0 ? <View style={styles.divider} /> : null}

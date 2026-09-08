@@ -37,19 +37,24 @@ import {
 export function AppBackground({
   choice,
   children,
+  customUri,
   remoteUrl,
   targetRef,
 }: {
   choice: BackgroundChoice;
   children?: ReactNode;
+  /** A file path for a photo picked from the phone. */
+  customUri?: string | null;
   /** A hotlinked Unsplash URL, used verbatim so its tracking parameter survives. */
   remoteUrl?: string | null;
   targetRef: RefObject<View | null>;
 }) {
   const remote = choice === 'unsplash' && remoteUrl ? remoteUrl : null;
-  // Falls back to a preset's gradient while a remote photo loads, or if it never does.
-  const background = findBackground(choice === 'unsplash' ? 'graphite' : choice);
-  const source = remote ? { uri: remote } : background.image;
+  const local = choice === 'custom' && customUri ? customUri : null;
+  // Falls back to a preset's gradient while a photo loads, or if it never does.
+  const preset = choice === 'unsplash' || choice === 'custom' ? 'graphite' : choice;
+  const background = findBackground(preset);
+  const source = remote ? { uri: remote } : local ? { uri: local } : background.image;
 
   return (
     <BlurTargetView ref={targetRef} style={styles.layer}>

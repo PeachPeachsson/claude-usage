@@ -217,6 +217,8 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
       borderColor: palette.line,
     },
     backgroundSwatchFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+    backgroundSwatchEmpty: { alignItems: 'center', justifyContent: 'center', backgroundColor: palette.line },
+    appearanceRowInset: { paddingHorizontal: 18, paddingBottom: 14 },
     unsplashSearchRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     unsplashInput: {
       ...pane,
