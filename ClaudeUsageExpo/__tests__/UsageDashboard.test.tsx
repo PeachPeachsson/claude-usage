@@ -16,6 +16,8 @@ const mockFetchCodexUsage = jest.fn<Promise<string>, []>();
 const mockReloadClaudeTransport = jest.fn();
 const mockPollCodexAuthorization = jest.fn<Promise<null>, [unknown]>(async () => null);
 const mockFetchProviderStatuses = jest.fn();
+const mockClearUsageNotifications = jest.fn<Promise<void>, [unknown]>(async () => undefined);
+const mockSyncUsageNotifications = jest.fn<Promise<void>, [unknown, unknown]>(async () => undefined);
 const mockRequestCodexAuthorization = jest.fn(async () => ({
   deviceAuthId: 'device-dashboard',
   expiresAt: new Date(Date.now() + 15 * 60_000),
@@ -105,6 +107,11 @@ jest.mock('@/src/infrastructure/providerStatus', () => {
   };
 });
 
+jest.mock('@/src/infrastructure/usageNotifications', () => ({
+  clearUsageNotifications: (provider: unknown) => mockClearUsageNotifications(provider),
+  syncUsageNotifications: (provider: unknown, snapshot: unknown) => mockSyncUsageNotifications(provider, snapshot),
+}));
+
 function latestWebViewProps(): Record<string, any> {
   const props = mockWebViewProps.at(-1);
   if (!props) throw new Error('No WebView rendered');
@@ -173,6 +180,8 @@ beforeEach(() => {
     claude: { checkedAt: new Date('2026-09-07T08:00:00.000Z'), condition: 'operational' },
     codex: { checkedAt: new Date('2026-09-07T08:00:00.000Z'), condition: 'degraded' },
   });
+  mockClearUsageNotifications.mockClear();
+  mockSyncUsageNotifications.mockClear();
 });
 
 afterEach(() => {
@@ -234,6 +243,9 @@ describe('UsageDashboard characterization', () => {
     expect(screen.getByText('använt')).toBeTruthy();
     expect(screen.getByText('76% kvar')).toBeTruthy();
     expect(screen.getByText('Claude · anslutet')).toBeTruthy();
+    expect(mockSyncUsageNotifications).toHaveBeenCalledWith('claude', expect.objectContaining({
+      windows: expect.arrayContaining([expect.objectContaining({ id: 'five-hour', utilization: 24 })]),
+    }));
   });
 
   it('records successful refreshes and presents local usage history', async () => {
@@ -328,6 +340,34 @@ describe('UsageDashboard characterization', () => {
     expect(mockUnlockAsync).toHaveBeenCalledTimes(2);
   });
 
+  it('shows Claude and Codex 5-hour usage side by side in the combined monitor', async () => {
+    mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: true }));
+    mockFetchCodexUsage.mockResolvedValue(JSON.stringify({
+      rate_limit: {
+        primary_window: {
+          limit_window_seconds: 18_000,
+          reset_after_seconds: 900,
+          used_percent: 52,
+        },
+      },
+    }));
+
+    await render(<UsageDashboard />);
+    await settleEffects();
+    await connectClaude(24, 61);
+    await fireEvent.press(screen.getByText('Öppna monitor'));
+    await settleEffects();
+    await fireEvent.press(screen.getByLabelText('Visa gränser för båda'));
+    await settleEffects();
+
+    expect(screen.getByTestId('monitor-combined-claude')).toBeTruthy();
+    expect(screen.getByTestId('monitor-combined-codex')).toBeTruthy();
+    expect(screen.getByText('24%')).toBeTruthy();
+    expect(screen.getByText('52%')).toBeTruthy();
+    expect(screen.queryByText('Vecka')).toBeNull();
+    expect(mockFetchCodexUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('switches provider when the landscape monitor is dragged sideways', async () => {
     mockStorageValues.set('usage-monitor.connected-providers.v1', JSON.stringify({ claude: true, codex: false }));
 
@@ -339,7 +379,7 @@ describe('UsageDashboard characterization', () => {
     await settleEffects();
 
     const swipeArea = screen.getByTestId('monitor-swipe-area');
-    expect(swipeArea.props.accessibilityHint).toBe('Dra i sidled för att byta mellan Claude och Codex.');
+    expect(swipeArea.props.accessibilityHint).toBe('Dra i sidled för att byta mellan Claude, Codex och båda.');
 
     // Velocity is derived from the wall clock, so the drag has to take real time to be judged as a
     // slow one rather than an instant flick. The provider changes between the two halves of the
@@ -411,7 +451,7 @@ describe('UsageDashboard characterization', () => {
     expect(dragged.opacity).toBeLessThan(1);
     expect(dragged.opacity).toBeGreaterThan(0.6);
 
-    // Codex has nowhere further to go, so the same drag the other way barely moves.
+    // Claude has nowhere further to go, so the same drag the other way barely moves.
     await fireEvent(swipeArea, 'responderMove', { nativeEvent: { pageX: 560, pageY: 204 } });
     expect(offset().translateX).toBeCloseTo(7.2);
 
@@ -582,6 +622,7 @@ describe('UsageDashboard characterization', () => {
     });
 
     expect(mockClearCodexAuth).toHaveBeenCalledTimes(1);
+    expect(mockClearUsageNotifications).toHaveBeenCalledWith('codex');
     expect(screen.getByText('Codex · inloggning krävs')).toBeTruthy();
   });
 

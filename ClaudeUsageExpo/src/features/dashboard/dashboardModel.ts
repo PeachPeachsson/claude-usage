@@ -5,6 +5,8 @@ import { CodexAuthRequiredError } from '@/src/infrastructure/codexDeviceAuth';
 import { CODEX_HOME_URL, CODEX_LOGIN_URL, isCodexURL } from '@/src/infrastructure/codexWeb';
 
 export const PROVIDERS: UsageProvider[] = ['claude', 'codex'];
+export type MonitorProvider = UsageProvider | 'both';
+export const MONITOR_PROVIDERS: MonitorProvider[] = ['claude', 'codex', 'both'];
 export const PROVIDER_META: Record<UsageProvider, { label: string; homeURL: string; loginURL: string }> = {
   claude: { label: 'Claude', homeURL: CLAUDE_HOME_URL, loginURL: CLAUDE_LOGIN_URL },
   codex: { label: 'Codex', homeURL: CODEX_HOME_URL, loginURL: CODEX_LOGIN_URL },
@@ -19,9 +21,9 @@ export const SWIPE_FLICK_DISTANCE = 24;
 export const SWIPE_COMMIT_VELOCITY = 0.35;
 
 export function providerForSwipe(
-  current: UsageProvider,
+  current: MonitorProvider,
   gesture: { dx: number; dy: number; vx: number },
-): UsageProvider | null {
+): MonitorProvider | null {
   const distance = Math.abs(gesture.dx);
   if (distance <= Math.abs(gesture.dy) * 1.5) return null;
 
@@ -34,9 +36,9 @@ export function providerForSwipe(
 
 // Dragging left pulls the next provider in from the right, matching the switcher's left-to-right
 // order. The list does not wrap, so a swipe past either end has nowhere to go.
-export function neighbourProvider(current: UsageProvider, dx: number): UsageProvider | null {
-  const index = PROVIDERS.indexOf(current);
-  return PROVIDERS[dx < 0 ? index + 1 : index - 1] ?? null;
+export function neighbourProvider(current: MonitorProvider, dx: number): MonitorProvider | null {
+  const index = MONITOR_PROVIDERS.indexOf(current);
+  return MONITOR_PROVIDERS[dx < 0 ? index + 1 : index - 1] ?? null;
 }
 
 // Revealing the history behind the limits panel is judged as a fraction of that panel rather than

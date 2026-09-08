@@ -52,7 +52,9 @@ import {
   getProviderFromURL,
   isClaudeLoginURL,
   isGoogleLoginBlockedMessage,
+  MonitorProvider,
   PROVIDER_META,
+  PROVIDERS,
 } from '@/src/features/dashboard/dashboardModel';
 
 import {
@@ -87,6 +89,10 @@ import {
   UsageHistory,
   USAGE_HISTORY_STORAGE_KEY,
 } from '@/src/infrastructure/usageHistory';
+import {
+  clearUsageNotifications,
+  syncUsageNotifications,
+} from '@/src/infrastructure/usageNotifications';
 
 const SAFARI_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
@@ -133,6 +139,7 @@ export function UsageDashboard() {
   const { height, width } = useWindowDimensions();
   const colorScheme = useColorScheme();
   const [activeProvider, setActiveProvider] = useState<UsageProvider>('claude');
+  const [monitorProvider, setMonitorProvider] = useState<MonitorProvider>('claude');
   const appearance = colorScheme === 'dark' ? 'dark' : 'light';
   const providerTheme = PROVIDER_THEMES[appearance][activeProvider];
   const palette = useMemo<Palette>(
@@ -250,6 +257,7 @@ export function UsageDashboard() {
       const nextSnapshot = parseCodexUsagePayload(body);
       setSnapshots((current) => ({ ...current, codex: nextSnapshot }));
       recordUsageSnapshot('codex', nextSnapshot);
+      void syncUsageNotifications('codex', nextSnapshot);
       setNeedsSignInByProvider((current) => ({ ...current, codex: false }));
       persistProviderConnection('codex', true);
       setLoginStatus('Klart — Codex-kontot är anslutet.');
@@ -268,14 +276,14 @@ export function UsageDashboard() {
   }, [persistProviderConnection, recordUsageSnapshot]);
 
   const refreshProvider = useCallback((provider: UsageProvider) => {
-    if (requestIdRef.current) return;
-    lastRefreshAttemptAtRef.current[provider] = Date.now();
-
     if (provider === 'codex') {
       pendingRefreshRef.current = false;
       void refreshCodexProvider();
       return;
     }
+
+    if (requestIdRef.current) return;
+    lastRefreshAttemptAtRef.current[provider] = Date.now();
 
     if (webViewProviderRef.current !== provider) {
       pendingRefreshRef.current = true;
@@ -337,7 +345,10 @@ export function UsageDashboard() {
           setNeedsSignInByProvider({ claude: !connected.claude, codex: !connected.codex });
         }
         const storedProvider = entries[1]?.[1] ?? null;
-        if (storedProvider === 'claude' || storedProvider === 'codex') setActiveProvider(storedProvider);
+        if (storedProvider === 'claude' || storedProvider === 'codex') {
+          setActiveProvider(storedProvider);
+          setMonitorProvider(storedProvider);
+        }
         setShowRefreshHint(entries[2]?.[1] !== 'true');
         setUsageHistory(parseUsageHistory(entries[3]?.[1] ?? null));
       })
@@ -397,6 +408,7 @@ export function UsageDashboard() {
   useEffect(() => {
     const refreshIfDue = () => {
       if (AppState.currentState !== 'active' || isShowingLogin) return;
+      if (monitorProvider === 'both' && (width > height || isMonitorRequested)) return;
       if (!connectedProvidersRef.current[activeProvider]) return;
 
       const now = Date.now();
@@ -414,7 +426,7 @@ export function UsageDashboard() {
       clearInterval(interval);
       subscription.remove();
     };
-  }, [activeProvider, isShowingLogin, refresh]);
+  }, [activeProvider, height, isMonitorRequested, isShowingLogin, monitorProvider, refresh, width]);
 
   const handleLoadEnd = useCallback(
     (event: { nativeEvent: { url: string } }) => {
@@ -483,6 +495,7 @@ export function UsageDashboard() {
         persistProviderConnection(provider, false);
         if (isDisconnectingClaudeRef.current) {
           isDisconnectingClaudeRef.current = false;
+          void clearUsageNotifications('claude');
           setSnapshots((current) => ({ ...current, claude: null }));
           setErrorMessages((current) => ({ ...current, claude: null }));
           setNeedsSignInByProvider((current) => ({ ...current, claude: true }));
@@ -526,6 +539,7 @@ export function UsageDashboard() {
         const nextSnapshot = parseUsagePayload(message.body);
         setSnapshots((current) => ({ ...current, [provider]: nextSnapshot }));
         recordUsageSnapshot(provider, nextSnapshot);
+        void syncUsageNotifications(provider, nextSnapshot);
         persistProviderConnection(provider, true);
         setNeedsSignInByProvider((current) => ({ ...current, [provider]: false }));
         setErrorMessages((current) => ({ ...current, [provider]: null }));
@@ -672,12 +686,62 @@ export function UsageDashboard() {
     setIsRefreshing(false);
     setIsShowingLogin(false);
     setActiveProvider(provider);
+    setMonitorProvider(provider);
     void AsyncStorage.setItem(LAST_PROVIDER_STORAGE_KEY, provider);
     void Haptics.selectionAsync();
     setNeedsSignInByProvider((current) => ({ ...current, [provider]: !connectedProvidersRef.current[provider] }));
     setLoginStatus(`Laddar ${PROVIDER_META[provider].label}…`);
     if (provider === 'claude') setWebSourceURL(PROVIDER_META[provider].homeURL);
   }, [activeProvider, clearRequestTimeout]);
+
+  const refreshConnectedProviders = useCallback(() => {
+    PROVIDERS.forEach((provider) => {
+      if (connectedProvidersRef.current[provider]) refreshProvider(provider);
+    });
+  }, [refreshProvider]);
+
+  const selectMonitorProvider = useCallback((provider: MonitorProvider) => {
+    setMonitorProvider(provider);
+    if (provider === 'both') {
+      void Haptics.selectionAsync();
+      refreshConnectedProviders();
+      return;
+    }
+    if (provider !== activeProvider) selectProvider(provider);
+  }, [activeProvider, refreshConnectedProviders, selectProvider]);
+
+  const refreshMonitor = useCallback(() => {
+    if (monitorProvider === 'both') {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      refreshConnectedProviders();
+      return;
+    }
+    refresh();
+  }, [monitorProvider, refresh, refreshConnectedProviders]);
+
+  useEffect(() => {
+    if (!connectionsHydrated || monitorProvider !== 'both' || isShowingLogin) return;
+    if (!(width > height || isMonitorRequested)) return;
+
+    const refreshIfDue = () => {
+      if (AppState.currentState !== 'active') return;
+      PROVIDERS.forEach((provider) => {
+        if (!connectedProvidersRef.current[provider]) return;
+        if (Date.now() - lastRefreshAttemptAtRef.current[provider] < AUTO_REFRESH_INTERVAL_MS) return;
+        refreshProvider(provider);
+      });
+    };
+
+    const interval = setInterval(refreshIfDue, AUTO_REFRESH_INTERVAL_MS);
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') refreshIfDue();
+    });
+
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [connectionsHydrated, height, isMonitorRequested, isShowingLogin, monitorProvider, refreshProvider, width]);
 
   const showAccount = useCallback(() => {
     setIsShowingAccount(true);
@@ -721,6 +785,7 @@ export function UsageDashboard() {
                   }
                 }
                 persistProviderConnection(activeProvider, false);
+                await clearUsageNotifications(activeProvider);
                 setSnapshots((current) => ({ ...current, [activeProvider]: null }));
                 setErrorMessages((current) => ({ ...current, [activeProvider]: null }));
                 setNeedsSignInByProvider((current) => ({ ...current, [activeProvider]: true }));
@@ -740,10 +805,11 @@ export function UsageDashboard() {
 
   const enterMonitorMode = useCallback(async () => {
     if (!snapshot) return;
+    setMonitorProvider(activeProvider);
     setIsMonitorRequested(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(ignoreOrientationLockError);
-  }, [snapshot]);
+  }, [activeProvider, snapshot]);
 
   const exitMonitorMode = useCallback(async () => {
     setIsMonitorRequested(false);
@@ -785,14 +851,17 @@ export function UsageDashboard() {
           historyPoints={usageHistory[activeProvider]}
           isCompact={width < 760}
           isRefreshing={isRefreshing}
+          monitorProvider={monitorProvider}
           onExit={exitMonitorMode}
-          onRefresh={() => refresh()}
-          onSelectProvider={selectProvider}
+          onRefresh={refreshMonitor}
+          onSelectProvider={selectMonitorProvider}
           primaryWindow={primaryWindow}
           providerAccentInk={providerTheme.monitorAccentInk}
+          providerThemes={PROVIDER_THEMES[appearance]}
           reduceMotion={reduceMotion}
           secondaryWindows={secondaryWindows}
           snapshot={snapshot}
+          snapshots={snapshots}
           styles={styles}
         />
       ) : (
@@ -837,7 +906,9 @@ export function UsageDashboard() {
 
           <ProviderSwitcher
             activeProvider={activeProvider}
-            onSelectProvider={selectProvider}
+            onSelectProvider={(provider) => {
+              if (provider !== 'both') selectProvider(provider);
+            }}
             styles={styles}
           />
 

@@ -17,13 +17,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { UsageSnapshot, UsageWindow } from '@/src/domain/usage';
 import { DashboardStyles } from '@/src/features/dashboard/dashboardStyles';
-import { Palette, UsageProvider } from '@/src/features/dashboard/dashboardTheme';
+import { Palette, ProviderTheme, UsageProvider } from '@/src/features/dashboard/dashboardTheme';
 import {
   formatMonitorTitle,
   formatRelativeTime,
   formatReset,
   formatWindowTitle,
   getUsageTint,
+  MonitorProvider,
+  MONITOR_PROVIDERS,
   neighbourProvider,
   nextHistoryReveal,
   PROVIDER_META,
@@ -78,47 +80,56 @@ export function ProviderSwitcher({
   onSelectProvider,
   styles,
 }: {
-  activeProvider: UsageProvider;
+  activeProvider: MonitorProvider;
   isMonitor?: boolean;
-  onSelectProvider: (provider: UsageProvider) => void;
+  onSelectProvider: (provider: MonitorProvider) => void;
   styles: DashboardStyles;
 }) {
+  const providers = isMonitor ? MONITOR_PROVIDERS : PROVIDERS;
   return (
     <View style={isMonitor ? styles.monitorProviderSwitcher : styles.providerSwitcher}>
-      {PROVIDERS.map((provider) => {
+      {providers.map((provider) => {
         const selected = provider === activeProvider;
         const labelStyle = isMonitor ? styles.monitorProviderOptionText : styles.providerOptionText;
         const selectedLabelStyle = isMonitor ? styles.monitorProviderOptionTextActive : styles.providerOptionTextActive;
+        const selectedColor = provider === 'both' ? '#0E0F11' : selectedLabelStyle.color;
+        const color = selected ? selectedColor : labelStyle.color;
+        const label = provider === 'both' ? 'Båda' : PROVIDER_META[provider].label;
         return (
           <Pressable
             key={provider}
-            accessibilityLabel={`Visa gränser för ${PROVIDER_META[provider].label}`}
+            accessibilityLabel={provider === 'both' ? 'Visa gränser för båda' : `Visa gränser för ${label}`}
             accessibilityRole="button"
             accessibilityState={{ selected }}
             onPress={() => onSelectProvider(provider)}
             style={({ pressed }) => [
               isMonitor ? styles.monitorProviderOption : styles.providerOption,
               selected && (isMonitor ? styles.monitorProviderOptionActive : styles.providerOptionActive),
+              selected && provider === 'both' && { backgroundColor: '#FFFFFF' },
               pressed && styles.pressed,
             ]}>
-            <Image
-              source={PROVIDER_LOGOS[provider]}
-              style={
-                provider === 'codex'
-                  ? isMonitor
-                    ? styles.monitorProviderLogoCodex
-                    : styles.providerLogoCodex
-                  : isMonitor
-                    ? styles.monitorProviderLogo
-                    : styles.providerLogo
-              }
-              contentFit="contain"
-              tintColor={selected ? selectedLabelStyle.color : labelStyle.color}
-              accessible={false}
-            />
+            {provider === 'both' ? (
+              <Ionicons color={color} name="grid-outline" size={15} style={styles.monitorProviderBothIcon} />
+            ) : (
+              <Image
+                source={PROVIDER_LOGOS[provider]}
+                style={
+                  provider === 'codex'
+                    ? isMonitor
+                      ? styles.monitorProviderLogoCodex
+                      : styles.providerLogoCodex
+                    : isMonitor
+                      ? styles.monitorProviderLogo
+                      : styles.providerLogo
+                }
+                contentFit="contain"
+                tintColor={color}
+                accessible={false}
+              />
+            )}
             <Text
-              style={[labelStyle, selected && selectedLabelStyle]}>
-              {PROVIDER_META[provider].label}
+              style={[labelStyle, selected && selectedLabelStyle, selected && provider === 'both' && { color }]}>
+              {label}
             </Text>
           </Pressable>
         );
@@ -132,28 +143,34 @@ export function LandscapeMonitor({
   historyPoints,
   isCompact,
   isRefreshing,
+  monitorProvider,
   onExit,
   onRefresh,
   onSelectProvider,
   primaryWindow,
   providerAccentInk,
+  providerThemes,
   reduceMotion,
   secondaryWindows,
   snapshot,
+  snapshots,
   styles,
 }: {
   activeProvider: UsageProvider;
   historyPoints: UsageHistoryPoint[];
   isCompact: boolean;
   isRefreshing: boolean;
+  monitorProvider: MonitorProvider;
   onExit: () => void;
   onRefresh: () => void;
-  onSelectProvider: (provider: UsageProvider) => void;
+  onSelectProvider: (provider: MonitorProvider) => void;
   primaryWindow: UsageWindow;
   providerAccentInk: string;
+  providerThemes: Record<UsageProvider, ProviderTheme>;
   reduceMotion: boolean;
   secondaryWindows: UsageWindow[];
   snapshot: UsageSnapshot;
+  snapshots: Record<UsageProvider, UsageSnapshot | null>;
   styles: DashboardStyles;
 }) {
   useKeepAwake('usage-monitor');
@@ -199,7 +216,7 @@ export function LandscapeMonitor({
     const origin = swipeOrigin.current;
     if (!origin || reduceMotion) return;
     const dx = event.nativeEvent.pageX - origin.x;
-    const resistance = neighbourProvider(activeProvider, dx) ? 0.5 : 0.12;
+    const resistance = neighbourProvider(monitorProvider, dx) ? 0.5 : 0.12;
     const travel = Math.min(followDistance, Math.abs(dx) * resistance) * Math.sign(dx);
     panelOffset.setValue(travel);
     panelOpacity.setValue(1 - (Math.abs(travel) / followDistance) * 0.4);
@@ -212,7 +229,7 @@ export function LandscapeMonitor({
 
     const dx = event.nativeEvent.pageX - origin.x;
     const dy = event.nativeEvent.pageY - origin.y;
-    const next = providerForSwipe(activeProvider, { dx, dy, vx: dx / Math.max(1, Date.now() - origin.at) });
+    const next = providerForSwipe(monitorProvider, { dx, dy, vx: dx / Math.max(1, Date.now() - origin.at) });
     if (!next) {
       settlePanels();
       return;
@@ -252,11 +269,17 @@ export function LandscapeMonitor({
 
   const utilization = Math.round(primaryWindow.utilization);
   const remaining = Math.max(0, 100 - utilization);
+  const combinedDates = PROVIDERS
+    .map((provider) => snapshots[provider]?.fetchedAt.getTime())
+    .filter((value): value is number => typeof value === 'number');
+  const monitorFetchedAt = monitorProvider === 'both' && combinedDates.length > 0
+    ? new Date(Math.min(...combinedDates))
+    : snapshot.fetchedAt;
 
   return (
     <SafeAreaView style={styles.monitorSafeArea} edges={['top', 'bottom', 'left', 'right']}>
       <View
-        accessibilityHint="Dra i sidled för att byta mellan Claude och Codex."
+        accessibilityHint="Dra i sidled för att byta mellan Claude, Codex och båda."
         onMoveShouldSetResponder={claimSwipe}
         onResponderMove={followSwipe}
         onResponderRelease={endSwipe}
@@ -270,13 +293,15 @@ export function LandscapeMonitor({
             <View style={styles.monitorConnection}>
               <View style={[styles.monitorStatusDot, styles.monitorLiveDot]} />
               {!isCompact ? (
-                <Text style={styles.monitorConnectionText}>{`${PROVIDER_META[activeProvider].label} · anslutet`}</Text>
+                <Text style={styles.monitorConnectionText}>
+                  {monitorProvider === 'both' ? 'Claude + Codex' : `${PROVIDER_META[activeProvider].label} · anslutet`}
+                </Text>
               ) : null}
             </View>
           </View>
 
           <ProviderSwitcher
-            activeProvider={activeProvider}
+            activeProvider={monitorProvider}
             isMonitor
             onSelectProvider={onSelectProvider}
             styles={styles}
@@ -284,7 +309,7 @@ export function LandscapeMonitor({
 
           <View style={styles.monitorHeaderActions}>
             {!isCompact ? (
-              <Text style={styles.monitorUpdated}>{`Uppdaterad ${formatRelativeTime(snapshot.fetchedAt)}`}</Text>
+              <Text style={styles.monitorUpdated}>{`Uppdaterad ${formatRelativeTime(monitorFetchedAt)}`}</Text>
             ) : null}
             <Pressable
               accessibilityLabel="Uppdatera gränser"
@@ -313,49 +338,124 @@ export function LandscapeMonitor({
         <Animated.View
           style={[styles.monitorBody, { opacity: panelOpacity, transform: [{ translateX: panelOffset }] }]}
           testID="monitor-swipe-panels">
-          <View style={styles.monitorPrimary}>
-            <View style={styles.monitorPrimaryHeader}>
-              <Text style={styles.monitorPrimaryTitle}>{formatMonitorTitle(primaryWindow)}</Text>
-              <View style={styles.monitorRemainingBadge}>
-                <Text style={styles.monitorRemaining}>{remaining}% kvar</Text>
+          {monitorProvider === 'both' ? (
+            <View style={styles.monitorCombinedBody}>
+              {PROVIDERS.map((provider) => (
+                <MonitorComparisonCard
+                  key={provider}
+                  provider={provider}
+                  snapshot={snapshots[provider]}
+                  styles={styles}
+                  theme={providerThemes[provider]}
+                />
+              ))}
+            </View>
+          ) : (
+            <>
+              <View style={styles.monitorPrimary}>
+                <View style={styles.monitorPrimaryHeader}>
+                  <Text style={styles.monitorPrimaryTitle}>{formatMonitorTitle(primaryWindow)}</Text>
+                  <View style={styles.monitorRemainingBadge}>
+                    <Text style={styles.monitorRemaining}>{remaining}% kvar</Text>
+                  </View>
+                </View>
+
+                <View style={styles.monitorMetricRow}>
+                  <Text style={styles.monitorMetric}>{utilization}%</Text>
+                  <Text style={styles.monitorMetricSuffix}>använt</Text>
+                </View>
+
+                <View
+                  accessibilityLabel={`${formatWindowTitle(primaryWindow)}, ${utilization} procent använt`}
+                  accessibilityRole="progressbar"
+                  accessibilityValue={{ min: 0, max: 100, now: utilization, text: `${utilization} procent använt` }}
+                  style={styles.monitorPrimaryTrack}>
+                  <View style={[styles.monitorPrimaryFill, { width: `${primaryWindow.utilization}%` }]} />
+                </View>
+
+                <View style={styles.monitorResetRow}>
+                  <Ionicons name="time-outline" size={23} color={providerAccentInk} />
+                  <Text style={styles.monitorResetText}>
+                    {formatReset(primaryWindow)}
+                  </Text>
+                </View>
               </View>
-            </View>
 
-            <View style={styles.monitorMetricRow}>
-              <Text style={styles.monitorMetric}>{utilization}%</Text>
-              <Text style={styles.monitorMetricSuffix}>använt</Text>
-            </View>
-
-            <View
-              accessibilityLabel={`${formatWindowTitle(primaryWindow)}, ${utilization} procent använt`}
-              accessibilityRole="progressbar"
-              accessibilityValue={{ min: 0, max: 100, now: utilization, text: `${utilization} procent använt` }}
-              style={styles.monitorPrimaryTrack}>
-              <View style={[styles.monitorPrimaryFill, { width: `${primaryWindow.utilization}%` }]} />
-            </View>
-
-            <View style={styles.monitorResetRow}>
-              <Ionicons name="time-outline" size={23} color={providerAccentInk} />
-              <Text style={styles.monitorResetText}>
-                {formatReset(primaryWindow)}
-              </Text>
-            </View>
-          </View>
-
-          {secondaryWindows.length > 0 ? (
-            <MonitorSecondaryPanel
-              historyPoints={historyPoints}
-              // The window ends at the last fetch rather than at mount, so it keeps up with each
-              // refresh instead of going stale while the monitor is kept awake for hours.
-              now={snapshot.fetchedAt.getTime()}
-              reduceMotion={reduceMotion}
-              secondaryWindows={secondaryWindows}
-              styles={styles}
-            />
-          ) : null}
+              {secondaryWindows.length > 0 ? (
+                <MonitorSecondaryPanel
+                  historyPoints={historyPoints}
+                  // The window ends at the last fetch rather than at mount, so it keeps up with each
+                  // refresh instead of going stale while the monitor is kept awake for hours.
+                  now={snapshot.fetchedAt.getTime()}
+                  reduceMotion={reduceMotion}
+                  secondaryWindows={secondaryWindows}
+                  styles={styles}
+                />
+              ) : null}
+            </>
+          )}
         </Animated.View>
       </View>
     </SafeAreaView>
+  );
+}
+
+function MonitorComparisonCard({
+  provider,
+  snapshot,
+  styles,
+  theme,
+}: {
+  provider: UsageProvider;
+  snapshot: UsageSnapshot | null;
+  styles: DashboardStyles;
+  theme: ProviderTheme;
+}) {
+  const window = snapshot?.windows.find((candidate) => candidate.id === 'five-hour') ?? null;
+  const color = theme.monitorAccentInk;
+
+  return (
+    <View
+      style={[styles.monitorCombinedCard, { backgroundColor: theme.monitorAccent }]}
+      testID={`monitor-combined-${provider}`}>
+      <View style={styles.monitorCombinedProviderRow}>
+        <Image
+          accessible={false}
+          contentFit="contain"
+          source={PROVIDER_LOGOS[provider]}
+          style={provider === 'codex' ? styles.monitorCombinedProviderLogoCodex : styles.monitorCombinedProviderLogo}
+          tintColor={color}
+        />
+        <Text style={[styles.monitorCombinedProviderName, { color }]}>{PROVIDER_META[provider].label}</Text>
+        <Text style={[styles.monitorCombinedWindowTitle, { color }]}>5 timmar</Text>
+      </View>
+
+      {window ? (
+        <>
+          <View style={styles.monitorCombinedMetricRow}>
+            <Text style={[styles.monitorCombinedMetric, { color }]}>{Math.round(window.utilization)}%</Text>
+            <Text style={[styles.monitorCombinedMetricSuffix, { color }]}>använt</Text>
+          </View>
+          <View
+            accessibilityLabel={`${PROVIDER_META[provider].label}, ${Math.round(window.utilization)} procent använt`}
+            accessibilityRole="progressbar"
+            accessibilityValue={{ min: 0, max: 100, now: Math.round(window.utilization) }}
+            style={styles.monitorCombinedTrack}>
+            <View style={[styles.monitorCombinedFill, { backgroundColor: color, width: `${window.utilization}%` }]} />
+          </View>
+          <View style={styles.monitorCombinedFooter}>
+            <Text style={[styles.monitorCombinedReset, { color }]}>{formatReset(window)}</Text>
+            <Text style={[styles.monitorCombinedRemaining, { color }]}>{Math.max(0, 100 - Math.round(window.utilization))}% kvar</Text>
+          </View>
+        </>
+      ) : (
+        <View style={styles.monitorCombinedMissing}>
+          <Ionicons color={color} name="log-in-outline" size={28} />
+          <Text style={[styles.monitorCombinedMissingText, { color }]}>Ingen data ännu</Text>
+          <Text style={[styles.monitorCombinedMissingCaption, { color }]}>Anslut kontot i stående läge.</Text>
+        </View>
+      )}
+    </View>
   );
 }
 

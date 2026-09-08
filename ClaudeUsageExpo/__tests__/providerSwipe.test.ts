@@ -1,4 +1,5 @@
 import {
+  MONITOR_PROVIDERS,
   nextHistoryReveal,
   providerForSwipe,
   SWIPE_COMMIT_DISTANCE,
@@ -11,17 +12,26 @@ import {
 const still = { dx: 0, dy: 0, vx: 0 };
 
 describe('landscape provider swipe', () => {
+  it('places the combined view after Codex', () => {
+    expect(MONITOR_PROVIDERS).toEqual(['claude', 'codex', 'both']);
+  });
+
   it('drags left from Claude to Codex', () => {
     expect(providerForSwipe('claude', { ...still, dx: -SWIPE_COMMIT_DISTANCE })).toBe('codex');
   });
 
-  it('drags right from Codex back to Claude', () => {
+  it('moves through Codex in either direction', () => {
+    expect(providerForSwipe('codex', { ...still, dx: -SWIPE_COMMIT_DISTANCE })).toBe('both');
     expect(providerForSwipe('codex', { ...still, dx: SWIPE_COMMIT_DISTANCE })).toBe('claude');
+  });
+
+  it('drags right from the combined view back to Codex', () => {
+    expect(providerForSwipe('both', { ...still, dx: SWIPE_COMMIT_DISTANCE })).toBe('codex');
   });
 
   it('ignores a swipe past either end of the list', () => {
     expect(providerForSwipe('claude', { ...still, dx: SWIPE_COMMIT_DISTANCE })).toBeNull();
-    expect(providerForSwipe('codex', { ...still, dx: -SWIPE_COMMIT_DISTANCE })).toBeNull();
+    expect(providerForSwipe('both', { ...still, dx: -SWIPE_COMMIT_DISTANCE })).toBeNull();
   });
 
   it('ignores a drag that stops short and is too slow to read as a flick', () => {
