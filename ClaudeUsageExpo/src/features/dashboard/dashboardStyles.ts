@@ -46,7 +46,9 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
       flexDirection: 'row',
       padding: 3,
       borderRadius: 14,
-      backgroundColor: '#242529',
+      // Hosts a pane, so on glass it has to be transparent for the same reason the portrait
+      // switcher is: an opaque fill leaves the pane nothing to blur.
+      backgroundColor: isGlass ? 'transparent' : '#242529',
     },
     monitorProviderOption: { flex: 1, borderRadius: 11, flexDirection: 'row', gap: 5, alignItems: 'center', justifyContent: 'center' },
     monitorProviderLogo: { width: 16, height: 16 },
@@ -67,6 +69,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     monitorBody: { flex: 1, minHeight: 0, flexDirection: 'row', gap: 14 },
     monitorCombinedBody: { flex: 1, minHeight: 0, flexDirection: 'row', gap: 14 },
     monitorCombinedCard: {
+      ...pane,
       flex: 1,
       justifyContent: 'center',
       gap: 13,
@@ -82,9 +85,12 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     monitorCombinedMetricRow: { flexDirection: 'row', alignItems: 'baseline', gap: 9 },
     monitorCombinedMetric: { fontSize: 78, fontWeight: '800', letterSpacing: -2.4, fontVariant: ['tabular-nums'] },
     monitorCombinedMetricSuffix: { fontSize: 18, fontWeight: '700', opacity: 0.68 },
-    monitorCombinedTrack: { height: 14, borderRadius: 7, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 0.42)' },
+    // A track that reads on the accent fill is far too bright on a pane, so glass takes the
+    // same softer track as the single-provider hero.
+    monitorCombinedTrack: { height: 14, borderRadius: 7, overflow: 'hidden', backgroundColor: heroTrack ?? 'rgba(255, 255, 255, 0.42)' },
     monitorCombinedFill: { height: '100%', borderRadius: 7 },
     monitorCombinedFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+    monitorCombinedResetRow: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 7 },
     monitorCombinedReset: { flexShrink: 1, fontSize: 17, fontWeight: '700', opacity: 0.82, fontVariant: ['tabular-nums'] },
     monitorCombinedRemaining: { fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
     monitorCombinedMissing: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },

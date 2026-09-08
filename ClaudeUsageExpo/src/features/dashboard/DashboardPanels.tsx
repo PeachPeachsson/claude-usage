@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { UsageSnapshot, UsageWindow } from '@/src/domain/usage';
 import { DashboardStyles } from '@/src/features/dashboard/dashboardStyles';
-import { GlassPane } from '@/src/features/dashboard/GlassSurface';
+import { GlassPane, useGlassEnabled } from '@/src/features/dashboard/GlassSurface';
 import { Palette, ProviderTheme, UsageProvider } from '@/src/features/dashboard/dashboardTheme';
 import {
   formatMonitorTitle,
@@ -150,7 +150,6 @@ export function LandscapeMonitor({
   onRefresh,
   onSelectProvider,
   primaryWindow,
-  providerAccentInk,
   providerThemes,
   reduceMotion,
   secondaryWindows,
@@ -167,7 +166,6 @@ export function LandscapeMonitor({
   onRefresh: () => void;
   onSelectProvider: (provider: MonitorProvider) => void;
   primaryWindow: UsageWindow;
-  providerAccentInk: string;
   providerThemes: Record<UsageProvider, ProviderTheme>;
   reduceMotion: boolean;
   secondaryWindows: UsageWindow[];
@@ -377,7 +375,9 @@ export function LandscapeMonitor({
                 </View>
 
                 <View style={styles.monitorResetRow}>
-                  <Ionicons name="time-outline" size={23} color={providerAccentInk} />
+                  {/* The label's own ink, so the icon cannot drift from it: hero content is
+                      dark on the accent panel but light on a glass pane. */}
+                  <Ionicons name="time-outline" size={23} color={styles.monitorResetText.color} testID="reset-icon" />
                   <Text style={styles.monitorResetText}>
                     {formatReset(primaryWindow)}
                   </Text>
@@ -415,12 +415,19 @@ function MonitorComparisonCard({
   theme: ProviderTheme;
 }) {
   const window = snapshot?.windows.find((candidate) => candidate.id === 'five-hour') ?? null;
-  const color = theme.monitorAccentInk;
+  // The same rule the hero panels follow in dashboardStyles: on light and dark the card is a
+  // solid accent fill carrying dark ink, and on glass it is a pane carrying light ink where
+  // the accent becomes the progress fill instead. This card resolves it itself because it
+  // draws both providers, while `styles` is built for the active one.
+  const isGlass = useGlassEnabled();
+  const color = isGlass ? styles.monitorPrimaryTitle.color : theme.monitorAccentInk;
+  const fill = isGlass ? theme.monitorAccent : theme.monitorAccentInk;
 
   return (
     <View
-      style={[styles.monitorCombinedCard, { backgroundColor: theme.monitorAccent }]}
+      style={[styles.monitorCombinedCard, isGlass ? null : { backgroundColor: theme.monitorAccent }]}
       testID={`monitor-combined-${provider}`}>
+      <GlassPane radius={16} />
       <View style={styles.monitorCombinedProviderRow}>
         <Image
           accessible={false}
@@ -444,10 +451,13 @@ function MonitorComparisonCard({
             accessibilityRole="progressbar"
             accessibilityValue={{ min: 0, max: 100, now: Math.round(window.utilization) }}
             style={styles.monitorCombinedTrack}>
-            <View style={[styles.monitorCombinedFill, { backgroundColor: color, width: `${window.utilization}%` }]} />
+            <View style={[styles.monitorCombinedFill, { backgroundColor: fill, width: `${window.utilization}%` }]} />
           </View>
           <View style={styles.monitorCombinedFooter}>
-            <Text style={[styles.monitorCombinedReset, { color }]}>{formatReset(window)}</Text>
+            <View style={styles.monitorCombinedResetRow}>
+              <Ionicons name="time-outline" size={19} color={color} testID="reset-icon" />
+              <Text style={[styles.monitorCombinedReset, { color }]}>{formatReset(window)}</Text>
+            </View>
             <Text style={[styles.monitorCombinedRemaining, { color }]}>{Math.max(0, 100 - Math.round(window.utilization))}% kvar</Text>
           </View>
         </>
@@ -670,11 +680,9 @@ function MonitorLimitRow({ isOnly, styles, window }: { isOnly: boolean; styles: 
 }
 
 export function PrimaryUsagePanel({
-  providerAccentInk,
   styles,
   window,
 }: {
-  providerAccentInk: string;
   styles: DashboardStyles;
   window: UsageWindow;
 }) {
@@ -705,7 +713,7 @@ export function PrimaryUsagePanel({
       </View>
 
       <View style={styles.primaryResetRow}>
-        <Ionicons name="time-outline" size={18} color={providerAccentInk} />
+        <Ionicons name="time-outline" size={18} color={styles.primaryResetText.color} testID="reset-icon" />
         <Text style={styles.primaryResetText}>
           {formatReset(window)}
         </Text>

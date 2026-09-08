@@ -39,6 +39,15 @@ export function GlassBackdropProvider({
 }
 
 /**
+ * Whether the glass appearance is on. Only for a card that has to pick its own colours
+ * because `styles` cannot do it: the styles are built for the active provider, so a panel
+ * showing both providers at once has to resolve each one's ink itself.
+ */
+export function useGlassEnabled(): boolean {
+  return useContext(GlassBackdropContext).enabled;
+}
+
+/**
  * A pane that knows whether the appearance is on, so a card can ask for one unconditionally
  * and the panels need no new prop threaded through them. Light and dark render nothing.
  */

@@ -1021,7 +1021,6 @@ export function UsageDashboard() {
             onRefresh={refreshMonitor}
             onSelectProvider={selectMonitorProvider}
             primaryWindow={primaryWindow}
-            providerAccentInk={providerTheme.monitorAccentInk}
             providerThemes={PROVIDER_THEMES[appearance]}
             reduceMotion={reduceMotion}
             secondaryWindows={secondaryWindows}
@@ -1091,7 +1090,6 @@ export function UsageDashboard() {
             {snapshot && primaryWindow ? (
               <View style={styles.stack}>
                 <PrimaryUsagePanel
-                  providerAccentInk={providerTheme.monitorAccentInk}
                   styles={styles}
                   window={primaryWindow}
                 />

@@ -34,6 +34,10 @@
  * Worst ratio across all eight: ink 8.54, secondary 5.64, tertiary 4.64, Claude accent 4.58,
  * Codex accent 4.56, success 4.55, danger 4.54. All clear WCAG AA for normal-size text.
  *
+ * Hero content is the one place ink is dimmed further by a panel's own `opacity`, down to
+ * 0.68 on the combined monitor's suffixes. Measured on the same panes that still leaves
+ * 4.97, so the budget survives it.
+ *
  * ANDROID. expo-blur does not blur at all unless a BlurView is given a blurTarget: its
  * ExpoBlurView forces BlurMethod.NONE without one and paints a flat tint instead. Even with
  * a target, the tint is applied as an overlay whose alpha is intensity/100 * 0.70 for every
