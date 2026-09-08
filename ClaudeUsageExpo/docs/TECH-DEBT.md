@@ -17,6 +17,10 @@
 | Ingen CI kör lint, TypeScript eller tester | Repository | Leveransrisk | Regressioner kan mergeas trots lokal gate | S | P0 före release | Öppen |
 | Ingen verifierad fysisk iPhone-E2E | Login, orientation, cookies | Testgap | Native skillnader fångas inte av Jest | M | P0 före release | Öppen |
 | Produktion och faktisk användarvolym är odokumenterade | Produkt/release | Kravskuld | Reliability-krav kan inte dimensioneras | S | P1 före Phase 7 | Öppen |
+| Dashboardkoordinatorn växte med utseende-, bakgrunds- och Unsplash-state samt ett eget blad | `src/features/dashboard/UsageDashboard.tsx` | Struktur | Förvärrar den redan noterade P0-posten ovan | M | P0 | Ny med glasutseendet; hör till samma Phase 5-extraktion |
+| Kontrastderiveringen för glaspanelerna är dokumenterad i kommentar, inte bevakad av test | `src/features/dashboard/glass.ts` | Testgap | En framtida palettändring kan tysta bryta WCAG AA utan att något larmar | S | P1 | Öppen; värdena är uträknade och verifierade en gång, men inte automatiskt |
+| Unsplash-sökning kräver en nyckel per utvecklare och saknas i CI | `src/infrastructure/unsplash.ts`, `.env.local.example` | Konfiguration | Funktionen är tyst avstängd utan nyckel, vilket är avsiktligt men odokumenterat utanför exempelfilen | S | P2 | Öppen |
+| Unsplash-flödet har inget automatiserat test av sökning till val | Utseendebladet | Testgap | Modulen är enhetstestad mot mockade svar och flödet är verifierat manuellt med en riktig nyckel, men inget test bevakar det | S | P2 | Öppen |
 
 ## Smell Inventory
 

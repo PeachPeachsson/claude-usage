@@ -2,13 +2,34 @@ import { StyleSheet } from 'react-native';
 
 import { Palette, ProviderTheme } from '@/src/features/dashboard/dashboardTheme';
 
-export function createDashboardStyles(palette: Palette, providerTheme: ProviderTheme) {
+export function createDashboardStyles(palette: Palette, providerTheme: ProviderTheme, isGlass = false) {
+  // On light and dark the hero panels are a solid accent fill, so their content is dark ink
+  // on that colour. On glass they become panes over the backdrop, so the same content flips
+  // to light ink and the progress fill becomes the accent, which is now the brightest thing
+  // on the panel rather than the panel itself.
+  const heroPanel = isGlass ? 'transparent' : providerTheme.monitorAccent;
+  const heroInk = isGlass ? palette.ink : providerTheme.monitorAccentInk;
+  const heroFill = isGlass ? providerTheme.monitorAccent : providerTheme.monitorAccentInk;
+  const heroTrack = isGlass ? 'rgba(255, 255, 255, 0.16)' : null;
+  // A pane needs overflow clipping or its blur ignores the corner radius.
+  const pane = isGlass ? { overflow: 'hidden' as const } : null;
+  // Opaque chrome in the landscape monitor has to let the backdrop through on glass.
+  const monitorChrome = isGlass ? 'rgba(255, 255, 255, 0.1)' : '#242529';
+  const monitorHairline = isGlass ? palette.line : '#3A3B40';
+  // The login and account sheets are native Modals, which render in their own window with
+  // nothing behind them to blur. A pane there would sample the dashboard window instead, so
+  // they get an opaque surface in the appearance's own dark rather than glass.
+  const sheetSurface = isGlass ? '#14161A' : palette.surface;
+  const sheetControl = isGlass ? 'rgba(255, 255, 255, 0.08)' : palette.surface;
+
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: palette.root },
     hiddenTransport: { position: 'absolute', left: -4, bottom: -4, width: 2, height: 2, opacity: 0 },
     safeArea: { flex: 1 },
     dashboardScroll: { flex: 1 },
-    monitorRoot: { backgroundColor: '#0E0F11' },
+    // Opaque on light and dark. On glass it has to let AppBackground through, which is
+    // what would otherwise make landscape look as though the appearance had not applied.
+    monitorRoot: { backgroundColor: isGlass ? 'transparent' : '#0E0F11' },
     monitorSafeArea: { flex: 1 },
     monitorShell: { flex: 1, paddingHorizontal: 18, paddingVertical: 12, gap: 12 },
     monitorHeader: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 20 },
@@ -19,6 +40,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     monitorLiveDot: { backgroundColor: '#55B789' },
     monitorConnectionText: { color: '#B8BAC1', fontSize: 15, fontWeight: '600' },
     monitorProviderSwitcher: {
+      ...pane,
       width: 246,
       height: 40,
       flexDirection: 'row',
@@ -38,8 +60,8 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     monitorProviderOptionTextActive: { color: providerTheme.monitorAccentInk },
     monitorHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 13 },
     monitorUpdated: { color: '#92949B', fontSize: 14, fontWeight: '500' },
-    monitorRefreshButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#242529', alignItems: 'center', justifyContent: 'center' },
-    monitorExitButton: { minHeight: 44, paddingHorizontal: 14, borderRadius: 14, backgroundColor: '#242529', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+    monitorRefreshButton: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', backgroundColor: monitorChrome, alignItems: 'center', justifyContent: 'center' },
+    monitorExitButton: { minHeight: 44, paddingHorizontal: 14, borderRadius: 14, overflow: 'hidden', backgroundColor: monitorChrome, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
     monitorExitText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
     monitorPressed: { opacity: 0.62, transform: [{ scale: 0.97 }] },
     monitorBody: { flex: 1, minHeight: 0, flexDirection: 'row', gap: 14 },
@@ -75,20 +97,21 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
       paddingHorizontal: 22,
       paddingVertical: 14,
       borderRadius: 16,
-      backgroundColor: providerTheme.monitorAccent,
+      overflow: 'hidden',
+      backgroundColor: heroPanel,
     },
     monitorPrimaryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16 },
-    monitorPrimaryTitle: { color: providerTheme.monitorAccentInk, fontSize: 20, fontWeight: '800', letterSpacing: -0.2 },
-    monitorRemainingBadge: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 999, backgroundColor: 'rgba(9, 15, 20, 0.12)' },
-    monitorRemaining: { color: providerTheme.monitorAccentInk, fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] },
+    monitorPrimaryTitle: { color: heroInk, fontSize: 20, fontWeight: '800', letterSpacing: -0.2 },
+    monitorRemainingBadge: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 999, backgroundColor: isGlass ? 'rgba(255, 255, 255, 0.14)' : 'rgba(9, 15, 20, 0.12)' },
+    monitorRemaining: { color: heroInk, fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] },
     monitorMetricRow: { flexDirection: 'row', alignItems: 'baseline', gap: 10 },
-    monitorMetric: { color: providerTheme.monitorAccentInk, fontSize: 104, fontWeight: '800', letterSpacing: -3, fontVariant: ['tabular-nums'] },
-    monitorMetricSuffix: { color: providerTheme.monitorAccentInk, fontSize: 21, fontWeight: '700', opacity: 0.72 },
-    monitorPrimaryTrack: { height: 16, borderRadius: 8, overflow: 'hidden', backgroundColor: 'rgba(255, 255, 255, 0.42)' },
-    monitorPrimaryFill: { height: '100%', borderRadius: 8, backgroundColor: providerTheme.monitorAccentInk },
+    monitorMetric: { color: heroInk, fontSize: 104, fontWeight: '800', letterSpacing: -3, fontVariant: ['tabular-nums'] },
+    monitorMetricSuffix: { color: heroInk, fontSize: 21, fontWeight: '700', opacity: 0.72 },
+    monitorPrimaryTrack: { height: 16, borderRadius: 8, overflow: 'hidden', backgroundColor: heroTrack ?? 'rgba(255, 255, 255, 0.42)' },
+    monitorPrimaryFill: { height: '100%', borderRadius: 8, backgroundColor: heroFill },
     monitorResetRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-    monitorResetText: { flexShrink: 1, color: providerTheme.monitorAccentInk, fontSize: 19, fontWeight: '700', opacity: 0.85, fontVariant: ['tabular-nums'] },
-    monitorSecondaryPanel: { flex: 0.9, overflow: 'hidden', borderRadius: 16, backgroundColor: '#1B1C20', paddingHorizontal: 20 },
+    monitorResetText: { flexShrink: 1, color: heroInk, fontSize: 19, fontWeight: '700', opacity: 0.85, fontVariant: ['tabular-nums'] },
+    monitorSecondaryPanel: { flex: 0.9, overflow: 'hidden', borderRadius: 16, backgroundColor: isGlass ? 'transparent' : '#1B1C20', paddingHorizontal: 20 },
     // The limits and the history are two faces of the same panel, stacked and slid vertically, so
     // both are absolutely positioned inside a clipped box that owns the panel's height.
     monitorSecondaryFaces: { flex: 1, minHeight: 0, overflow: 'hidden' },
@@ -102,10 +125,10 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     monitorHistoryChart: { flex: 1, minHeight: 0, flexDirection: 'row', alignItems: 'stretch', gap: 3 },
     monitorHistoryBarSlot: { flex: 1, justifyContent: 'flex-end' },
     monitorHistoryBar: { minHeight: 3, width: '100%', borderRadius: 3, backgroundColor: providerTheme.monitorAccent },
-    monitorHistoryBarEmpty: { height: 2, width: '100%', borderRadius: 1, backgroundColor: '#3A3B40' },
+    monitorHistoryBarEmpty: { height: 2, width: '100%', borderRadius: 1, backgroundColor: monitorHairline },
     monitorHistorySummary: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     monitorHistorySummaryText: { color: '#FFFFFF', fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] },
-    monitorHistorySummaryDivider: { width: 1, height: 14, backgroundColor: '#3A3B40' },
+    monitorHistorySummaryDivider: { width: 1, height: 14, backgroundColor: monitorHairline },
     monitorHistorySummaryMuted: { color: '#AEB0B7', fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
     monitorHistoryEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
     monitorHistoryEmptyText: { maxWidth: 260, color: '#AEB0B7', fontSize: 14, lineHeight: 20, textAlign: 'center' },
@@ -120,7 +143,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     monitorLimitValueSingle: { fontSize: 54, letterSpacing: -1.4 },
     monitorLimitSuffix: { color: '#AEB0B7', fontSize: 13, fontWeight: '500' },
     monitorLimitSuffixSingle: { fontSize: 16 },
-    monitorLimitTrack: { height: 12, borderRadius: 6, overflow: 'hidden', backgroundColor: '#3A3B40' },
+    monitorLimitTrack: { height: 12, borderRadius: 6, overflow: 'hidden', backgroundColor: monitorHairline },
     monitorLimitTrackSingle: { height: 14, borderRadius: 7 },
     monitorLimitFill: { height: '100%', borderRadius: 5, backgroundColor: providerTheme.monitorAccent },
     monitorDangerFill: { backgroundColor: '#FF746C' },
@@ -131,11 +154,13 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     signedOutLandscapeContent: { paddingTop: 8, gap: 14 },
     screenContent: { gap: 24 },
     header: { minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     title: { color: palette.ink, fontSize: 36, fontWeight: '700', letterSpacing: -1.1 },
     connectionRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 7 },
     connectionText: { color: palette.secondary, fontSize: 14, fontWeight: '500' },
     statusDot: { width: 7, height: 7, borderRadius: 4 },
     providerSwitcher: {
+      ...pane,
       height: 48,
       flexDirection: 'row',
       padding: 4,
@@ -151,6 +176,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     providerOptionText: { color: palette.secondary, fontSize: 16, fontWeight: '700' },
     providerOptionTextActive: { color: palette.accentInk },
     accountButton: {
+      ...pane,
       minWidth: 96,
       height: 48,
       paddingHorizontal: 15,
@@ -164,23 +190,81 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
       gap: 7,
     },
     accountButtonText: { color: palette.ink, fontSize: 15, fontWeight: '700' },
+    appearanceButton: {
+      ...pane,
+      width: 48,
+      height: 48,
+      borderRadius: 15,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.line,
+      backgroundColor: palette.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    appearanceContent: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32, gap: 22 },
+    appearanceRow: { minHeight: 60, paddingHorizontal: 18, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 14 },
+    appearanceRowCopy: { flex: 1, gap: 2 },
+    appearanceRowLabel: { color: palette.ink, fontSize: 16, fontWeight: '700' },
+    appearanceRowNote: { color: palette.secondary, fontSize: 13, lineHeight: 18 },
+    // The preview is the only way to tell the presets apart, so it shows the real gradient
+    // or the real image rather than a colour chip.
+    backgroundSwatch: {
+      width: 38,
+      height: 38,
+      borderRadius: 10,
+      overflow: 'hidden',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.line,
+    },
+    backgroundSwatchFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+    unsplashSearchRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    unsplashInput: {
+      ...pane,
+      flex: 1,
+      minHeight: 46,
+      paddingHorizontal: 14,
+      borderRadius: 13,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.line,
+      backgroundColor: palette.surface,
+      color: palette.ink,
+      fontSize: 15,
+    },
+    unsplashSearchButton: {
+      minHeight: 46,
+      paddingHorizontal: 16,
+      borderRadius: 13,
+      backgroundColor: palette.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    unsplashSearchButtonText: { color: palette.accentInk, fontSize: 15, fontWeight: '700' },
+    unsplashGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+    unsplashTile: { width: 96, height: 96, borderRadius: 12, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line },
+    unsplashTileSelected: { borderWidth: 2, borderColor: palette.accent },
+    unsplashTileImage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+    unsplashNote: { color: palette.secondary, fontSize: 13, lineHeight: 19 },
+    // Attribution is required by the Unsplash API terms, not decoration.
+    unsplashCredit: { color: palette.secondary, fontSize: 12, lineHeight: 18 },
+    unsplashCreditLink: { color: palette.accent, fontWeight: '700' },
     pressed: { opacity: 0.62, transform: [{ scale: 0.98 }] },
     stack: { gap: 22 },
-    primaryPanel: { backgroundColor: providerTheme.monitorAccent, padding: 20, borderRadius: 16, gap: 20 },
+    primaryPanel: { backgroundColor: heroPanel, padding: 20, borderRadius: 16, gap: 20, overflow: 'hidden' },
     primaryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-    primaryLabel: { flex: 1, color: providerTheme.monitorAccentInk, fontSize: 17, fontWeight: '700' },
-    remainingBadge: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 999, backgroundColor: 'rgba(9, 15, 20, 0.12)' },
-    remainingBadgeText: { color: providerTheme.monitorAccentInk, fontSize: 13, fontWeight: '700' },
+    primaryLabel: { flex: 1, color: heroInk, fontSize: 17, fontWeight: '700' },
+    remainingBadge: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 999, backgroundColor: isGlass ? 'rgba(255, 255, 255, 0.14)' : 'rgba(9, 15, 20, 0.12)' },
+    remainingBadgeText: { color: heroInk, fontSize: 13, fontWeight: '700' },
     primaryValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-    primaryValue: { color: providerTheme.monitorAccentInk, fontSize: 52, fontWeight: '800', letterSpacing: -1.8, fontVariant: ['tabular-nums'] },
-    primaryValueSuffix: { color: providerTheme.monitorAccentInk, fontSize: 15, fontWeight: '600', opacity: 0.68 },
-    primaryTrack: { height: 10, borderRadius: 5, overflow: 'hidden', backgroundColor: 'rgba(9, 15, 20, 0.18)' },
-    primaryFill: { height: '100%', borderRadius: 5, backgroundColor: providerTheme.monitorAccentInk },
+    primaryValue: { color: heroInk, fontSize: 52, fontWeight: '800', letterSpacing: -1.8, fontVariant: ['tabular-nums'] },
+    primaryValueSuffix: { color: heroInk, fontSize: 15, fontWeight: '600', opacity: 0.68 },
+    primaryTrack: { height: 10, borderRadius: 5, overflow: 'hidden', backgroundColor: heroTrack ?? 'rgba(9, 15, 20, 0.18)' },
+    primaryFill: { height: '100%', borderRadius: 5, backgroundColor: heroFill },
     primaryResetRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    primaryResetText: { flexShrink: 1, color: providerTheme.monitorAccentInk, fontSize: 16, fontWeight: '600', opacity: 0.85, fontVariant: ['tabular-nums'] },
+    primaryResetText: { flexShrink: 1, color: heroInk, fontSize: 16, fontWeight: '600', opacity: 0.85, fontVariant: ['tabular-nums'] },
     limitsSection: { gap: 10 },
     sectionTitle: { color: palette.ink, fontSize: 20, fontWeight: '700', letterSpacing: -0.35 },
     limitsCard: {
+      ...pane,
       overflow: 'hidden',
       borderRadius: 16,
       borderWidth: StyleSheet.hairlineWidth,
@@ -206,10 +290,11 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
       backgroundColor: palette.line,
     },
     historyPeriodOption: { minWidth: 56, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-    historyPeriodOptionActive: { backgroundColor: palette.surface },
+    historyPeriodOptionActive: { backgroundColor: isGlass ? 'rgba(255, 255, 255, 0.16)' : palette.surface },
     historyPeriodText: { color: palette.secondary, fontSize: 12, fontWeight: '700' },
     historyPeriodTextActive: { color: palette.ink },
     historyCard: {
+      ...pane,
       minHeight: 154,
       paddingHorizontal: 18,
       paddingTop: 18,
@@ -231,7 +316,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     historySummaryDivider: { width: 1, height: 13, backgroundColor: palette.line },
     historyEmpty: { minHeight: 120, alignItems: 'center', justifyContent: 'center', gap: 10 },
     historyEmptyText: { maxWidth: 240, color: palette.secondary, fontSize: 13, lineHeight: 19, textAlign: 'center' },
-    statusRefreshButton: { width: 36, height: 36, borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface, alignItems: 'center', justifyContent: 'center' },
+    statusRefreshButton: { ...pane, width: 36, height: 36, borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface, alignItems: 'center', justifyContent: 'center' },
     statusRefreshIcon: { color: palette.ink },
     statusCard: { overflow: 'hidden', borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface },
     statusRow: { minHeight: 66, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14 },
@@ -253,6 +338,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     caption: { color: palette.secondary, fontSize: 12, marginTop: 4, marginLeft: 14 },
     refreshHint: { color: palette.secondary, fontSize: 13, lineHeight: 18, marginTop: -12 },
     refreshButton: {
+      ...pane,
       width: 48,
       height: 48,
       borderRadius: 24,
@@ -271,9 +357,10 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
       alignItems: 'center',
       gap: 12,
     },
-    monitorButton: { minHeight: 48, width: '100%', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+    monitorButton: { ...pane, minHeight: 48, width: '100%', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.line, backgroundColor: palette.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
     monitorButtonText: { color: palette.ink, fontSize: 15, fontWeight: '700' },
     signInPanel: {
+      ...pane,
       width: '100%',
       maxWidth: 620,
       minHeight: 430,
@@ -308,8 +395,8 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     errorText: { color: palette.errorText, fontSize: 13, lineHeight: 19 },
     errorAction: { minHeight: 44, paddingHorizontal: 14, borderRadius: 11, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.errorText, alignItems: 'center', justifyContent: 'center' },
     errorActionText: { color: palette.errorText, fontSize: 14, fontWeight: '700' },
-    loginSafeArea: { flex: 1, backgroundColor: palette.surface },
-    loginHeader: { height: 56, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line, backgroundColor: palette.surface },
+    loginSafeArea: { flex: 1, backgroundColor: sheetSurface },
+    loginHeader: { height: 56, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line, backgroundColor: sheetSurface },
     loginTitle: { color: palette.ink, fontSize: 17, fontWeight: '700' },
     loginAction: { color: palette.accent, fontSize: 16, fontWeight: '600', minWidth: 48 },
     loginHeaderSpacer: { width: 48 },
@@ -317,7 +404,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     loginActionRight: { textAlign: 'right' },
     loginHint: { minHeight: 54, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: palette.accentSoft, flexDirection: 'row', alignItems: 'center', gap: 10 },
     loginHintText: { flex: 1, color: palette.ink, fontSize: 13, lineHeight: 18 },
-    deviceLoginScroll: { flex: 1, backgroundColor: palette.surface },
+    deviceLoginScroll: { flex: 1, backgroundColor: sheetSurface },
     deviceLoginPanel: {
       flexGrow: 1,
       paddingHorizontal: 28,
@@ -379,7 +466,7 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
       borderColor: palette.line,
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: palette.surface,
+      backgroundColor: sheetControl,
     },
     deviceLoginSecondaryButtonText: { color: palette.ink, fontSize: 15, fontWeight: '700' },
     deviceActionStack: { width: '100%', maxWidth: 350, gap: 12 },
@@ -387,12 +474,12 @@ export function createDashboardStyles(palette: Palette, providerTheme: ProviderT
     deviceLoginPrivacy: { marginTop: 'auto', maxWidth: 330, color: palette.tertiary, fontSize: 12, lineHeight: 18, textAlign: 'center' },
     webViewHost: { flex: 1, overflow: 'hidden' },
     webView: { flex: 1, backgroundColor: '#FFFFFF' },
-    accountSheet: { flex: 1, backgroundColor: palette.root },
+    accountSheet: { flex: 1, backgroundColor: sheetSurface },
     accountContent: { flex: 1, paddingHorizontal: 24, paddingTop: 42, alignItems: 'center', gap: 16 },
     accountIcon: { width: 82, height: 82, borderRadius: 24, backgroundColor: palette.accentSoft, alignItems: 'center', justifyContent: 'center' },
     accountTitle: { color: palette.ink, fontSize: 25, fontWeight: '800', textAlign: 'center', letterSpacing: -0.4 },
     accountText: { maxWidth: 360, color: palette.secondary, fontSize: 16, lineHeight: 23, textAlign: 'center' },
-    disconnectButton: { width: '100%', maxWidth: 360, minHeight: 52, marginTop: 18, paddingHorizontal: 18, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.danger, backgroundColor: palette.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+    disconnectButton: { width: '100%', maxWidth: 360, minHeight: 52, marginTop: 18, paddingHorizontal: 18, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: palette.danger, backgroundColor: sheetControl, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
     disconnectButtonText: { color: palette.danger, fontSize: 16, fontWeight: '700' },
   });
 }

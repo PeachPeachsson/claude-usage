@@ -4,6 +4,8 @@ import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -18,6 +20,7 @@ import {
   RefreshControl,
   ScrollView,
   Text,
+  TextInput,
   TurboModuleRegistry,
   useColorScheme,
   useWindowDimensions,
@@ -36,13 +39,33 @@ import {
   UsageLimitRow,
 } from '@/src/features/dashboard/DashboardPanels';
 import {
-  DARK_PALETTE,
-  LIGHT_PALETTE,
+  Appearance,
+  isThemeChoice,
+  PALETTES,
   Palette,
   PROVIDER_THEMES,
+  ThemeChoice,
   UsageProvider,
 } from '@/src/features/dashboard/dashboardTheme';
 import { createDashboardStyles } from '@/src/features/dashboard/dashboardStyles';
+import { AppBackground } from '@/src/features/dashboard/AppBackground';
+import {
+  BUILT_IN_BACKGROUNDS,
+  DEFAULT_BACKGROUND_ID,
+  isBackgroundChoice,
+  isPhotoBackdrop,
+  type BackgroundChoice,
+} from '@/src/features/dashboard/glass';
+import {
+  photographerUrl,
+  readAccessKey,
+  searchPhotos,
+  trackDownload,
+  UNSPLASH_HOME_URL,
+  type UnsplashFailure,
+  type UnsplashPhoto,
+} from '@/src/infrastructure/unsplash';
+import { GlassBackdropProvider, GlassPane } from '@/src/features/dashboard/GlassSurface';
 import { ProviderBackdrop } from '@/src/features/dashboard/ProviderBackdrop';
 import {
   formatCountdown,
@@ -103,6 +126,14 @@ const STATUS_REFRESH_INTERVAL_MS = 5 * 60_000;
 const CONNECTION_STORAGE_KEY = 'usage-monitor.connected-providers.v1';
 const LAST_PROVIDER_STORAGE_KEY = 'usage-monitor.last-provider.v1';
 const REFRESH_HINT_STORAGE_KEY = 'usage-monitor.refresh-hint-seen.v1';
+const APPEARANCE_STORAGE_KEY = 'usage-monitor.appearance.v1';
+const BACKGROUND_STORAGE_KEY = 'usage-monitor.background.v1';
+const UNSPLASH_PHOTO_STORAGE_KEY = 'usage-monitor.unsplash-photo.v1';
+
+const THEME_CHOICES: { id: ThemeChoice; label: string; note: string }[] = [
+  { id: 'glass', label: 'Glas', note: 'Frostade ytor över en bakgrund' },
+  { id: 'system', label: 'Original', note: 'Ljust eller mörkt, följer telefonen' },
+];
 
 const CLAUDE_LOGIN_GUARD_SCRIPT = `
   (function () {
@@ -137,16 +168,39 @@ type CodexLoginState = {
 export function UsageDashboard() {
   const insets = useSafeAreaInsets();
   const { height, width } = useWindowDimensions();
-  const colorScheme = useColorScheme();
   const [activeProvider, setActiveProvider] = useState<UsageProvider>('claude');
   const [monitorProvider, setMonitorProvider] = useState<MonitorProvider>('claude');
-  const appearance = colorScheme === 'dark' ? 'dark' : 'light';
+  const colorScheme = useColorScheme();
+  // Glass is one translucent look, so it replaces light and dark rather than sitting beside
+  // them. 'system' keeps the original behaviour of following the phone.
+  // Defaults to the existing behaviour, so this change is additive: nobody's appearance
+  // shifts under them and glass is something you opt into. PRODUCT.md describes the brand
+  // as calm, precise and discreet, which a photographic backdrop is not by default.
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>('system');
+  const [backgroundId, setBackgroundId] = useState<BackgroundChoice>(DEFAULT_BACKGROUND_ID);
+  const [unsplashPhoto, setUnsplashPhoto] = useState<UnsplashPhoto | null>(null);
+  const [unsplashQuery, setUnsplashQuery] = useState('');
+  const [unsplashResults, setUnsplashResults] = useState<UnsplashPhoto[]>([]);
+  const [unsplashError, setUnsplashError] = useState<UnsplashFailure | null>(null);
+  const [isSearchingUnsplash, setIsSearchingUnsplash] = useState(false);
+  // Read once: whether search is configured decides what the section offers at all,
+  // rather than leaving a dead search field for someone to discover by pressing it.
+  const hasUnsplashKey = readAccessKey() !== null;
+  const [isShowingAppearance, setIsShowingAppearance] = useState(false);
+  const appearance: Appearance =
+    themeChoice === 'glass' ? 'glass' : colorScheme === 'dark' ? 'dark' : 'light';
+  const isGlass = appearance === 'glass';
   const providerTheme = PROVIDER_THEMES[appearance][activeProvider];
   const palette = useMemo<Palette>(
-    () => ({ ...(appearance === 'dark' ? DARK_PALETTE : LIGHT_PALETTE), ...providerTheme }),
+    () => ({ ...PALETTES[appearance], ...providerTheme }),
     [appearance, providerTheme],
   );
-  const styles = useMemo(() => createDashboardStyles(palette, providerTheme), [palette, providerTheme]);
+  const styles = useMemo(
+    () => createDashboardStyles(palette, providerTheme, isGlass),
+    [palette, providerTheme, isGlass],
+  );
+  // Android blurs this view rather than whatever happens to be behind each pane.
+  const blurTargetRef = useRef<View | null>(null);
   const webViewRef = useRef<WebView>(null);
   const loginWebViewRef = useRef<WebView>(null);
   const webViewProviderRef = useRef<UsageProvider>('claude');
@@ -331,6 +385,9 @@ export function UsageDashboard() {
       LAST_PROVIDER_STORAGE_KEY,
       REFRESH_HINT_STORAGE_KEY,
       USAGE_HISTORY_STORAGE_KEY,
+      APPEARANCE_STORAGE_KEY,
+      BACKGROUND_STORAGE_KEY,
+      UNSPLASH_PHOTO_STORAGE_KEY,
     ])
       .then((entries) => {
         if (cancelled) return;
@@ -351,6 +408,18 @@ export function UsageDashboard() {
         }
         setShowRefreshHint(entries[2]?.[1] !== 'true');
         setUsageHistory(parseUsageHistory(entries[3]?.[1] ?? null));
+        const storedTheme = entries[4]?.[1] ?? null;
+        if (isThemeChoice(storedTheme)) setThemeChoice(storedTheme);
+        const storedBackground = entries[5]?.[1] ?? null;
+        if (isBackgroundChoice(storedBackground)) setBackgroundId(storedBackground);
+        const storedPhoto = entries[6]?.[1] ?? null;
+        if (storedPhoto) {
+          try {
+            setUnsplashPhoto(JSON.parse(storedPhoto) as UnsplashPhoto);
+          } catch {
+            void AsyncStorage.removeItem(UNSPLASH_PHOTO_STORAGE_KEY);
+          }
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -742,6 +811,43 @@ export function UsageDashboard() {
       subscription.remove();
     };
   }, [connectionsHydrated, height, isMonitorRequested, isShowingLogin, monitorProvider, refreshProvider, width]);
+  const chooseTheme = useCallback((choice: ThemeChoice) => {
+    setThemeChoice(choice);
+    void Haptics.selectionAsync();
+    void AsyncStorage.setItem(APPEARANCE_STORAGE_KEY, choice);
+  }, []);
+
+  const chooseBackground = useCallback((id: BackgroundChoice) => {
+    setBackgroundId(id);
+    void Haptics.selectionAsync();
+    void AsyncStorage.setItem(BACKGROUND_STORAGE_KEY, id);
+  }, []);
+
+  const runUnsplashSearch = useCallback(async (query: string) => {
+    setIsSearchingUnsplash(true);
+    setUnsplashError(null);
+    const result = await searchPhotos(query);
+    setIsSearchingUnsplash(false);
+    if (result.ok) {
+      setUnsplashResults(result.photos);
+      return;
+    }
+    setUnsplashResults([]);
+    setUnsplashError(result.reason);
+  }, []);
+
+  const chooseUnsplashPhoto = useCallback(
+    (photo: UnsplashPhoto) => {
+      setUnsplashPhoto(photo);
+      setBackgroundId('unsplash');
+      void Haptics.selectionAsync();
+      void AsyncStorage.setItem(UNSPLASH_PHOTO_STORAGE_KEY, JSON.stringify(photo));
+      void AsyncStorage.setItem(BACKGROUND_STORAGE_KEY, 'unsplash');
+      // Unsplash requires this report on every download, and choosing a backdrop is one.
+      void trackDownload(photo.downloadLocation);
+    },
+    [],
+  );
 
   const showAccount = useCallback(() => {
     setIsShowingAccount(true);
@@ -826,385 +932,610 @@ export function UsageDashboard() {
   const isSignedOutLandscape = isLandscape && !snapshot && !isShowingLogin;
 
   return (
-    <View style={[styles.root, isMonitorMode && styles.monitorRoot]}>
-      <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
-      <WebView
-        key={`claude-transport-${transportKey}`}
-        ref={webViewRef}
-        source={{ uri: CLAUDE_HOME_URL }}
-        containerStyle={styles.hiddenTransport}
-        style={styles.hiddenTransport}
-        pointerEvents="none"
-        javaScriptEnabled
-        domStorageEnabled
-        sharedCookiesEnabled
-        thirdPartyCookiesEnabled
-        userAgent={SAFARI_USER_AGENT}
-        onLoadEnd={handleLoadEnd}
-        onMessage={handleMessage}
-        onNavigationStateChange={handleNavigationChange}
-      />
-      <StatusBar hidden={isMonitorMode} style={isMonitorMode ? 'light' : 'auto'} />
-      {isMonitorMode && snapshot && primaryWindow ? (
-        <LandscapeMonitor
-          activeProvider={activeProvider}
-          historyPoints={usageHistory[activeProvider]}
-          isCompact={width < 760}
-          isRefreshing={isRefreshing}
-          monitorProvider={monitorProvider}
-          onExit={exitMonitorMode}
-          onRefresh={refreshMonitor}
-          onSelectProvider={selectMonitorProvider}
-          primaryWindow={primaryWindow}
-          providerAccentInk={providerTheme.monitorAccentInk}
-          providerThemes={PROVIDER_THEMES[appearance]}
-          reduceMotion={reduceMotion}
-          secondaryWindows={secondaryWindows}
-          snapshot={snapshot}
-          snapshots={snapshots}
-          styles={styles}
+    <GlassBackdropProvider
+      enabled={isGlass}
+      photo={isGlass && isPhotoBackdrop(backgroundId)}
+      targetRef={blurTargetRef}>
+      <View style={[styles.root, isMonitorMode && styles.monitorRoot]}>
+        {isGlass ? (
+          <AppBackground
+            choice={backgroundId}
+            remoteUrl={unsplashPhoto?.imageUrl ?? null}
+            targetRef={blurTargetRef}>
+            <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
+          </AppBackground>
+        ) : (
+          <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
+        )}
+        <WebView
+          key={`claude-transport-${transportKey}`}
+          ref={webViewRef}
+          source={{ uri: CLAUDE_HOME_URL }}
+          containerStyle={styles.hiddenTransport}
+          style={styles.hiddenTransport}
+          pointerEvents="none"
+          javaScriptEnabled
+          domStorageEnabled
+          sharedCookiesEnabled
+          thirdPartyCookiesEnabled
+          userAgent={SAFARI_USER_AGENT}
+          onLoadEnd={handleLoadEnd}
+          onMessage={handleMessage}
+          onNavigationStateChange={handleNavigationChange}
         />
-      ) : (
-        <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-        <ScrollView
-          testID="dashboard-scroll"
-          style={styles.dashboardScroll}
-          automaticallyAdjustContentInsets={false}
-          automaticallyAdjustKeyboardInsets={false}
-          automaticallyAdjustsScrollIndicatorInsets={false}
-          contentInsetAdjustmentBehavior="never"
-          contentInset={{ bottom: 0, left: 0, right: 0, top: 0 }}
-          scrollIndicatorInsets={{ bottom: 0, left: 0, right: 0, top: 0 }}
-          contentContainerStyle={[
-            styles.content,
-            isSignedOutLandscape && styles.signedOutLandscapeContent,
-            { paddingBottom: Math.max(32, insets.bottom + 20) },
-          ]}
-          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => refresh()} tintColor={palette.accent} />}>
-          <Animated.View style={[styles.screenContent, { opacity: contentOpacity }]}>
-          <View style={styles.header}>
-            <View>
-              <Text style={styles.title}>Usage</Text>
-              <View style={styles.connectionRow}>
-                <View style={[styles.statusDot, { backgroundColor: needsSignIn ? palette.danger : errorMessage ? palette.accent : snapshot ? palette.success : palette.secondary }]} />
-                <Text style={styles.connectionText}>
-                  {`${PROVIDER_META[activeProvider].label} · ${needsSignIn ? 'inloggning krävs' : errorMessage && snapshot ? 'senast hämtat' : snapshot ? 'anslutet' : 'hämtar gränser'}`}
-                </Text>
-              </View>
-            </View>
-            {snapshot && !needsSignIn ? (
-              <Pressable
-                accessibilityLabel={`Hantera ${PROVIDER_META[activeProvider].label}-inloggning`}
-                accessibilityRole="button"
-                onPress={showAccount}
-                style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}>
-                <Ionicons name="person-circle-outline" size={19} color={palette.ink} />
-                <Text style={styles.accountButtonText}>Konto</Text>
-              </Pressable>
-            ) : null}
-          </View>
-
-          <ProviderSwitcher
+        <StatusBar hidden={isMonitorMode} style={isMonitorMode || isGlass ? 'light' : 'auto'} />
+        {isMonitorMode && snapshot && primaryWindow ? (
+          <LandscapeMonitor
             activeProvider={activeProvider}
-            onSelectProvider={(provider) => {
-              if (provider !== 'both') selectProvider(provider);
-            }}
+            historyPoints={usageHistory[activeProvider]}
+            isCompact={width < 760}
+            isRefreshing={isRefreshing}
+            monitorProvider={monitorProvider}
+            onExit={exitMonitorMode}
+            onRefresh={refreshMonitor}
+            onSelectProvider={selectMonitorProvider}
+            primaryWindow={primaryWindow}
+            providerAccentInk={providerTheme.monitorAccentInk}
+            providerThemes={PROVIDER_THEMES[appearance]}
+            reduceMotion={reduceMotion}
+            secondaryWindows={secondaryWindows}
+            snapshot={snapshot}
+            snapshots={snapshots}
             styles={styles}
           />
+        ) : (
+          <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+          <ScrollView
+            testID="dashboard-scroll"
+            style={styles.dashboardScroll}
+            automaticallyAdjustContentInsets={false}
+            automaticallyAdjustKeyboardInsets={false}
+            automaticallyAdjustsScrollIndicatorInsets={false}
+            contentInsetAdjustmentBehavior="never"
+            contentInset={{ bottom: 0, left: 0, right: 0, top: 0 }}
+            scrollIndicatorInsets={{ bottom: 0, left: 0, right: 0, top: 0 }}
+            contentContainerStyle={[
+              styles.content,
+              isSignedOutLandscape && styles.signedOutLandscapeContent,
+              { paddingBottom: Math.max(32, insets.bottom + 20) },
+            ]}
+            refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => refresh()} tintColor={palette.accent} />}>
+            <Animated.View style={[styles.screenContent, { opacity: contentOpacity }]}>
+            <View style={styles.header}>
+              <View>
+                <Text style={styles.title}>Usage</Text>
+                <View style={styles.connectionRow}>
+                  <View style={[styles.statusDot, { backgroundColor: needsSignIn ? palette.danger : errorMessage ? palette.accent : snapshot ? palette.success : palette.secondary }]} />
+                  <Text style={styles.connectionText}>
+                    {`${PROVIDER_META[activeProvider].label} · ${needsSignIn ? 'inloggning krävs' : errorMessage && snapshot ? 'senast hämtat' : snapshot ? 'anslutet' : 'hämtar gränser'}`}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.headerActions}>
+                {snapshot && !needsSignIn ? (
+                  <Pressable
+                    accessibilityLabel={`Hantera ${PROVIDER_META[activeProvider].label}-inloggning`}
+                    accessibilityRole="button"
+                    onPress={showAccount}
+                    style={({ pressed }) => [styles.accountButton, pressed && styles.pressed]}>
+                    <GlassPane radius={15} />
+                    <Ionicons name="person-circle-outline" size={19} color={palette.ink} />
+                    <Text style={styles.accountButtonText}>Konto</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  accessibilityLabel="Utseende"
+                  accessibilityRole="button"
+                  onPress={() => setIsShowingAppearance(true)}
+                  style={({ pressed }) => [styles.appearanceButton, pressed && styles.pressed]}>
+                  <GlassPane radius={15} />
+                  <Ionicons name="color-palette-outline" size={20} color={palette.ink} />
+                </Pressable>
+              </View>
+            </View>
 
-          {snapshot && primaryWindow ? (
-            <View style={styles.stack}>
-              <PrimaryUsagePanel
-                providerAccentInk={providerTheme.monitorAccentInk}
-                styles={styles}
-                window={primaryWindow}
-              />
+            <ProviderSwitcher
+              activeProvider={activeProvider}
+              onSelectProvider={(provider) => {
+                if (provider !== 'both') selectProvider(provider);
+              }}
+              styles={styles}
+            />
 
-              {secondaryWindows.length > 0 ? (
+            {snapshot && primaryWindow ? (
+              <View style={styles.stack}>
+                <PrimaryUsagePanel
+                  providerAccentInk={providerTheme.monitorAccentInk}
+                  styles={styles}
+                  window={primaryWindow}
+                />
+
+                {secondaryWindows.length > 0 ? (
+                  <View style={styles.limitsSection}>
+                    <Text style={styles.sectionTitle}>Övriga gränser</Text>
+                    <View style={styles.limitsCard}>
+                    <GlassPane radius={16} />
+                      {secondaryWindows.map((window, index) => (
+                        <View key={window.id}>
+                          {index > 0 ? <View style={styles.divider} /> : null}
+                          <UsageLimitRow palette={palette} styles={styles} window={window} />
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
+                <UsageHistoryPanel points={usageHistory[activeProvider]} styles={styles} />
+
+                <View style={styles.freshnessRow}>
+                  <View style={styles.freshnessCopy}>
+                    <View style={styles.freshnessTitleRow}>
+                      <View style={[styles.statusDot, { backgroundColor: palette.success }]} />
+                      <Text style={styles.freshnessTitle}>{`Uppdaterad ${formatRelativeTime(snapshot.fetchedAt)}`}</Text>
+                    </View>
+                    <Text style={styles.caption}>{`Direkt från ${PROVIDER_META[activeProvider].label}`}</Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel="Uppdatera gränser"
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: isRefreshing, busy: isRefreshing }}
+                    disabled={isRefreshing}
+                    onPress={() => refresh()}
+                    style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
+                    <GlassPane radius={15} />
+                    {isRefreshing ? (
+                      <ActivityIndicator size="small" color={palette.ink} />
+                    ) : (
+                      <Ionicons name="refresh" size={21} color={palette.ink} />
+                    )}
+                  </Pressable>
+                </View>
+                {showRefreshHint ? <Text style={styles.refreshHint}>Tips: Dra nedåt för att uppdatera.</Text> : null}
+
+                <View style={styles.utilityRow}>
+                  <Pressable
+                    accessibilityLabel="Öppna liggande monitor"
+                    accessibilityRole="button"
+                    onPress={() => void enterMonitorMode()}
+                    style={({ pressed }) => [styles.monitorButton, pressed && styles.pressed]}>
+                    <GlassPane radius={14} />
+                    <AppSymbol fallback="phone-landscape-outline" name="rectangle" size={19} color={palette.ink} />
+                    <Text style={styles.monitorButtonText}>Öppna monitor</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <View style={[styles.signInPanel, isSignedOutLandscape && styles.signInPanelLandscape]}>
+              <GlassPane radius={16} />
+                <View style={[styles.signInIntro, isSignedOutLandscape && styles.signInIntroLandscape]}>
+                  <View style={styles.signInIcon}>
+                    <Ionicons name={errorMessage ? 'cloud-offline-outline' : 'person-outline'} size={32} color={palette.accent} />
+                  </View>
+                  <View style={styles.signInCopy}>
+                    <Text style={styles.signInTitle}>
+                      {errorMessage
+                        ? 'Gränserna kunde inte hämtas'
+                        : needsSignIn
+                          ? `Logga in på ${PROVIDER_META[activeProvider].label}`
+                          : `Hämtar gränser från ${PROVIDER_META[activeProvider].label}`}
+                    </Text>
+                    <Text style={styles.signInText}>
+                      {errorMessage
+                        ? 'Kontrollera internet och försök igen. Om inloggningen har gått ut hjälper appen dig att ansluta på nytt.'
+                        : needsSignIn
+                          ? activeProvider === 'codex'
+                            ? 'Anslut ditt OpenAI-konto för att se aktuella Codex-gränser och återställningstider.'
+                            : 'Anslut ditt Claude-konto för att se aktuella gränser och återställningstider.'
+                          : 'Din sparade inloggning kontrolleras. Det tar vanligtvis bara några sekunder.'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={[styles.signInActions, isSignedOutLandscape && styles.signInActionsLandscape]}>
+                  {needsSignIn || errorMessage ? (
+                    <Pressable
+                      accessibilityLabel={errorMessage && !needsSignIn ? 'Försök hämta gränser igen' : `Logga in på ${PROVIDER_META[activeProvider].label}`}
+                      accessibilityRole="button"
+                      onPress={errorMessage && !needsSignIn ? () => refresh() : showLogin}
+                      style={({ pressed }) => [styles.signInButton, pressed && styles.pressed]}>
+                      <Text style={styles.signInButtonText}>
+                        {errorMessage && !needsSignIn
+                          ? 'Försök igen'
+                          : activeProvider === 'codex' ? 'Fortsätt med OpenAI' : 'Fortsätt med Claude'}
+                      </Text>
+                      <Ionicons name="arrow-forward" size={19} color={palette.accentInk} />
+                    </Pressable>
+                  ) : (
+                    <View style={styles.checkingRow}>
+                      <ActivityIndicator color={palette.accent} />
+                      <Text style={styles.checkingText}>Kontrollerar sparad inloggning…</Text>
+                    </View>
+                  )}
+
+                  <View style={[styles.signInAssurances, isSignedOutLandscape && styles.signInAssurancesLandscape]}>
+                    <View style={styles.assuranceRow}>
+                      <Ionicons name="key-outline" size={19} color={palette.accent} />
+                      <Text style={styles.assuranceText}>Du behöver normalt bara logga in en gång.</Text>
+                    </View>
+                    <View style={styles.assuranceRow}>
+                      <Ionicons name="shield-checkmark-outline" size={19} color={palette.accent} />
+                      <Text style={styles.assuranceText}>Din inloggning och dina gränser stannar på din iPhone.</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            )}
+
+            <ServiceStatusPanel
+              isRefreshing={isRefreshingStatus}
+              onRefresh={() => void refreshServiceStatus()}
+              statuses={providerStatuses}
+              styles={styles}
+            />
+
+            {errorMessage && snapshot ? (
+              <View accessibilityLiveRegion="polite" style={styles.errorCard}>
+                <Ionicons name="warning" size={18} color={palette.danger} />
+                <View style={styles.errorBody}>
+                  <Text style={styles.errorText}>{errorMessage}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={needsSignIn ? showLogin : () => refresh()}
+                    style={({ pressed }) => [styles.errorAction, pressed && styles.pressed]}>
+                    <Text style={styles.errorActionText}>{needsSignIn ? 'Logga in igen' : 'Försök igen'}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+            </Animated.View>
+          </ScrollView>
+          </SafeAreaView>
+        )}
+
+        <Modal
+          animationType="slide"
+          onRequestClose={dismissLogin}
+          presentationStyle="pageSheet"
+          visible={isShowingLogin}>
+          <SafeAreaView accessibilityViewIsModal style={styles.loginSafeArea} edges={['top', 'bottom', 'left', 'right']}>
+            <View style={styles.loginHeader}>
+              <Pressable accessibilityLabel="Stäng inloggningen" accessibilityRole="button" onPress={dismissLogin} hitSlop={12} style={styles.headerActionHitbox}>
+                <Text style={styles.loginAction}>Avbryt</Text>
+              </Pressable>
+              <Text style={styles.loginTitle}>
+                {activeProvider === 'codex' ? 'Anslut Codex' : 'Logga in på Claude'}
+              </Text>
+              <View style={styles.loginHeaderSpacer} />
+            </View>
+            <View accessibilityLiveRegion="polite" style={styles.loginHint}>
+              {isRefreshing || codexLogin?.phase === 'starting' || codexLogin?.phase === 'finishing'
+                ? <ActivityIndicator size="small" color={palette.accent} />
+                : <AppSymbol fallback={activeProvider === 'codex' ? 'key-outline' : 'mail-outline'} name={activeProvider === 'codex' ? 'key' : 'envelope'} size={18} color={palette.accent} />}
+              <Text style={styles.loginHintText}>{loginStatus}</Text>
+            </View>
+            {activeProvider === 'codex' ? (
+              <ScrollView
+                style={styles.deviceLoginScroll}
+                contentContainerStyle={styles.deviceLoginPanel}
+                showsVerticalScrollIndicator={false}>
+                <View style={styles.deviceLoginIcon}>
+                  <AppSymbol fallback="shield-checkmark-outline" name="checkmark.shield" size={34} color={palette.accent} />
+                </View>
+                <Text style={styles.deviceLoginTitle}>Logga in säkert hos OpenAI</Text>
+                <Text style={styles.deviceLoginText}>
+                  Du lämnar appen en kort stund. När du har godkänt återgår du hit och anslutningen slutförs automatiskt.
+                </Text>
+
+                {codexLogin?.authorization ? (
+                  <>
+                    <View style={styles.deviceCodeBlock}>
+                      <Text style={styles.deviceCodeLabel}>DIN ENGÅNGSKOD</Text>
+                      <Text selectable style={styles.deviceCode}>{codexLogin.authorization.userCode}</Text>
+                      <Text style={styles.deviceCodeCountdown}>{formatCountdown(codexLogin.authorization.expiresAt, now)}</Text>
+                    </View>
+                    <View style={styles.deviceSteps}>
+                      <View style={styles.deviceStep}>
+                        <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>1</Text></View>
+                        <Text style={styles.deviceStepText}>Kopiera koden och öppna OpenAI.</Text>
+                      </View>
+                      <View style={styles.deviceStep}>
+                        <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>2</Text></View>
+                        <Text style={styles.deviceStepText}>Klistra in koden och godkänn.</Text>
+                      </View>
+                      <View style={styles.deviceStep}>
+                        <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>3</Text></View>
+                        <Text style={styles.deviceStepText}>Gå tillbaka hit. Resten sker automatiskt.</Text>
+                      </View>
+                    </View>
+                  </>
+                ) : null}
+
+                {codexLogin?.phase === 'starting' || codexLogin?.phase === 'finishing' ? (
+                  <ActivityIndicator size="large" color={palette.accent} />
+                ) : codexLogin?.phase === 'error' ? (
+                  <View style={styles.deviceActionStack}>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => void startCodexLogin()}
+                      style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
+                      <Text style={styles.deviceLoginButtonText}>Försök igen</Text>
+                      <AppSymbol fallback="refresh" name="arrow.clockwise" size={19} color={palette.accentInk} />
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={openCodexSecuritySettings}
+                      style={({ pressed }) => [styles.deviceLoginSecondaryButton, pressed && styles.pressed]}>
+                      <Text style={styles.deviceLoginSecondaryButtonText}>Kontrollera OpenAI-inställning</Text>
+                    </Pressable>
+                  </View>
+                ) : codexLogin?.authorization ? (
+                  <Pressable
+                    accessibilityLabel="Kopiera engångskoden och öppna OpenAI"
+                    accessibilityRole="button"
+                    onPress={() => void copyCodeAndOpenCodex()}
+                    style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
+                    <Text style={styles.deviceLoginButtonText}>{isCodexCodeCopied ? 'Öppna OpenAI igen' : 'Kopiera kod och öppna OpenAI'}</Text>
+                    <AppSymbol fallback="open-outline" name="arrow.up.forward.app" size={19} color={palette.accentInk} />
+                  </Pressable>
+                ) : null}
+
+                {codexLogin?.errorMessage ? <Text style={styles.deviceLoginError}>{codexLogin.errorMessage}</Text> : null}
+                <Text style={styles.deviceLoginPrivacy}>Inloggningen sparas säkert i iOS-nyckelringen på den här enheten.</Text>
+              </ScrollView>
+            ) : (
+              <View style={styles.webViewHost}>
+                <WebView
+                  ref={loginWebViewRef}
+                  source={{ uri: webSourceURL }}
+                  style={styles.webView}
+                  javaScriptEnabled
+                  domStorageEnabled
+                  sharedCookiesEnabled
+                  thirdPartyCookiesEnabled
+                  javaScriptCanOpenWindowsAutomatically
+                  setSupportMultipleWindows={false}
+                  userAgent={SAFARI_USER_AGENT}
+                  injectedJavaScriptBeforeContentLoaded={CLAUDE_LOGIN_GUARD_SCRIPT}
+                  onLoadEnd={handleLoadEnd}
+                  onMessage={handleMessage}
+                  onNavigationStateChange={handleNavigationChange}
+                  onOpenWindow={handleOpenWindow}
+                  onShouldStartLoadWithRequest={handleShouldStartLoad}
+                  onError={() => setLoginStatus('Claude-sidan kunde inte laddas. Kontrollera nätverket.')}
+                />
+              </View>
+            )}
+          </SafeAreaView>
+        </Modal>
+
+        <Modal
+          animationType="slide"
+          onRequestClose={() => setIsShowingAppearance(false)}
+          presentationStyle="pageSheet"
+          visible={isShowingAppearance}>
+          <SafeAreaView accessibilityViewIsModal style={styles.accountSheet} edges={['top', 'bottom', 'left', 'right']}>
+            <View style={styles.loginHeader}>
+              <View style={styles.loginHeaderSpacer} />
+              <Text style={styles.loginTitle}>Utseende</Text>
+              <Pressable
+                accessibilityLabel="Stäng utseende"
+                accessibilityRole="button"
+                hitSlop={12}
+                onPress={() => setIsShowingAppearance(false)}
+                style={styles.headerActionHitbox}>
+                <Text style={[styles.loginAction, styles.loginActionRight]}>Stäng</Text>
+              </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={styles.appearanceContent}>
+              <View style={styles.limitsSection}>
+                <Text style={styles.sectionTitle}>Tema</Text>
+                <View style={styles.statusCard}>
+                  {THEME_CHOICES.map((choice, index) => (
+                    <View key={choice.id}>
+                      {index > 0 ? <View style={styles.divider} /> : null}
+                      <Pressable
+                        accessibilityLabel={choice.label}
+                        accessibilityRole="radio"
+                        accessibilityState={{ checked: themeChoice === choice.id }}
+                        onPress={() => chooseTheme(choice.id)}
+                        style={({ pressed }) => [styles.appearanceRow, pressed && styles.pressed]}>
+                        <View style={styles.appearanceRowCopy}>
+                          <Text style={styles.appearanceRowLabel}>{choice.label}</Text>
+                          <Text style={styles.appearanceRowNote}>{choice.note}</Text>
+                        </View>
+                        <Ionicons
+                          name={themeChoice === choice.id ? 'checkmark-circle' : 'ellipse-outline'}
+                          size={23}
+                          color={themeChoice === choice.id ? palette.accent : palette.line}
+                        />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              {themeChoice === 'glass' ? (
                 <View style={styles.limitsSection}>
-                  <Text style={styles.sectionTitle}>Övriga gränser</Text>
-                  <View style={styles.limitsCard}>
-                    {secondaryWindows.map((window, index) => (
-                      <View key={window.id}>
+                  <Text style={styles.sectionTitle}>Bakgrund</Text>
+                  <View style={styles.statusCard}>
+                    {BUILT_IN_BACKGROUNDS.map((background, index) => (
+                      <View key={background.id}>
                         {index > 0 ? <View style={styles.divider} /> : null}
-                        <UsageLimitRow palette={palette} styles={styles} window={window} />
+                        <Pressable
+                          accessibilityLabel={background.label}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: backgroundId === background.id }}
+                          onPress={() => chooseBackground(background.id)}
+                          style={({ pressed }) => [styles.appearanceRow, pressed && styles.pressed]}>
+                          <View style={styles.backgroundSwatch}>
+                            <LinearGradient
+                              colors={background.colors}
+                              end={{ x: 0.9, y: 1 }}
+                              start={{ x: 0.1, y: 0 }}
+                              style={styles.backgroundSwatchFill}
+                            />
+                            {background.image ? (
+                              <Image
+                                contentFit="cover"
+                                source={background.image}
+                                style={styles.backgroundSwatchFill}
+                                accessible={false}
+                              />
+                            ) : null}
+                          </View>
+                          <View style={styles.appearanceRowCopy}>
+                            <Text style={styles.appearanceRowLabel}>{background.label}</Text>
+                            <Text style={styles.appearanceRowNote}>{background.note}</Text>
+                          </View>
+                          <Ionicons
+                            name={backgroundId === background.id ? 'checkmark-circle' : 'ellipse-outline'}
+                            size={23}
+                            color={backgroundId === background.id ? palette.accent : palette.line}
+                          />
+                        </Pressable>
                       </View>
                     ))}
                   </View>
                 </View>
               ) : null}
 
-              <UsageHistoryPanel points={usageHistory[activeProvider]} styles={styles} />
-
-              <View style={styles.freshnessRow}>
-                <View style={styles.freshnessCopy}>
-                  <View style={styles.freshnessTitleRow}>
-                    <View style={[styles.statusDot, { backgroundColor: palette.success }]} />
-                    <Text style={styles.freshnessTitle}>{`Uppdaterad ${formatRelativeTime(snapshot.fetchedAt)}`}</Text>
-                  </View>
-                  <Text style={styles.caption}>{`Direkt från ${PROVIDER_META[activeProvider].label}`}</Text>
-                </View>
-                <Pressable
-                  accessibilityLabel="Uppdatera gränser"
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: isRefreshing, busy: isRefreshing }}
-                  disabled={isRefreshing}
-                  onPress={() => refresh()}
-                  style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
-                  {isRefreshing ? (
-                    <ActivityIndicator size="small" color={palette.ink} />
-                  ) : (
-                    <Ionicons name="refresh" size={21} color={palette.ink} />
+              {themeChoice === 'glass' ? (
+                <View style={styles.limitsSection}>
+                  <Text style={styles.sectionTitle}>Från Unsplash</Text>
+                  {hasUnsplashKey ? null : (
+                    <Text style={styles.unsplashNote}>{unsplashFailureMessage('no-key')}</Text>
                   )}
-                </Pressable>
-              </View>
-              {showRefreshHint ? <Text style={styles.refreshHint}>Tips: Dra nedåt för att uppdatera.</Text> : null}
+                  {hasUnsplashKey ? (
+                  <View style={styles.unsplashSearchRow}>
+                    <TextInput
+                      accessibilityLabel="Sök bakgrund på Unsplash"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      onChangeText={setUnsplashQuery}
+                      onSubmitEditing={() => void runUnsplashSearch(unsplashQuery)}
+                      placeholder="Sök, till exempel glas eller dimma"
+                      placeholderTextColor={palette.tertiary}
+                      returnKeyType="search"
+                      style={styles.unsplashInput}
+                      value={unsplashQuery}
+                    />
+                    <Pressable
+                      accessibilityLabel="Sök"
+                      accessibilityRole="button"
+                      disabled={isSearchingUnsplash}
+                      onPress={() => void runUnsplashSearch(unsplashQuery)}
+                      style={({ pressed }) => [styles.unsplashSearchButton, pressed && styles.pressed]}>
+                      {isSearchingUnsplash ? (
+                        <ActivityIndicator size="small" color={palette.accentInk} />
+                      ) : (
+                        <Text style={styles.unsplashSearchButtonText}>Sök</Text>
+                      )}
+                    </Pressable>
+                  </View>
+                  ) : null}
 
-              <View style={styles.utilityRow}>
-                <Pressable
-                  accessibilityLabel="Öppna liggande monitor"
-                  accessibilityRole="button"
-                  onPress={() => void enterMonitorMode()}
-                  style={({ pressed }) => [styles.monitorButton, pressed && styles.pressed]}>
-                  <AppSymbol fallback="phone-landscape-outline" name="rectangle" size={19} color={palette.ink} />
-                  <Text style={styles.monitorButtonText}>Öppna monitor</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : (
-            <View style={[styles.signInPanel, isSignedOutLandscape && styles.signInPanelLandscape]}>
-              <View style={[styles.signInIntro, isSignedOutLandscape && styles.signInIntroLandscape]}>
-                <View style={styles.signInIcon}>
-                  <Ionicons name={errorMessage ? 'cloud-offline-outline' : 'person-outline'} size={32} color={palette.accent} />
-                </View>
-                <View style={styles.signInCopy}>
-                  <Text style={styles.signInTitle}>
-                    {errorMessage
-                      ? 'Gränserna kunde inte hämtas'
-                      : needsSignIn
-                        ? `Logga in på ${PROVIDER_META[activeProvider].label}`
-                        : `Hämtar gränser från ${PROVIDER_META[activeProvider].label}`}
-                  </Text>
-                  <Text style={styles.signInText}>
-                    {errorMessage
-                      ? 'Kontrollera internet och försök igen. Om inloggningen har gått ut hjälper appen dig att ansluta på nytt.'
-                      : needsSignIn
-                        ? activeProvider === 'codex'
-                          ? 'Anslut ditt OpenAI-konto för att se aktuella Codex-gränser och återställningstider.'
-                          : 'Anslut ditt Claude-konto för att se aktuella gränser och återställningstider.'
-                        : 'Din sparade inloggning kontrolleras. Det tar vanligtvis bara några sekunder.'}
-                  </Text>
-                </View>
-              </View>
+                  {unsplashError && unsplashError !== 'no-key' ? (
+                    <Text style={styles.unsplashNote}>{unsplashFailureMessage(unsplashError)}</Text>
+                  ) : null}
 
-              <View style={[styles.signInActions, isSignedOutLandscape && styles.signInActionsLandscape]}>
-                {needsSignIn || errorMessage ? (
-                  <Pressable
-                    accessibilityLabel={errorMessage && !needsSignIn ? 'Försök hämta gränser igen' : `Logga in på ${PROVIDER_META[activeProvider].label}`}
-                    accessibilityRole="button"
-                    onPress={errorMessage && !needsSignIn ? () => refresh() : showLogin}
-                    style={({ pressed }) => [styles.signInButton, pressed && styles.pressed]}>
-                    <Text style={styles.signInButtonText}>
-                      {errorMessage && !needsSignIn
-                        ? 'Försök igen'
-                        : activeProvider === 'codex' ? 'Fortsätt med OpenAI' : 'Fortsätt med Claude'}
+                  {unsplashResults.length > 0 ? (
+                    <View style={styles.unsplashGrid}>
+                      {unsplashResults.map((photo) => (
+                        <Pressable
+                          accessibilityLabel={photo.description ?? `Foto av ${photo.photographerName}`}
+                          accessibilityRole="radio"
+                          accessibilityState={{
+                            checked: backgroundId === 'unsplash' && unsplashPhoto?.id === photo.id,
+                          }}
+                          key={photo.id}
+                          onPress={() => chooseUnsplashPhoto(photo)}
+                          style={({ pressed }) => [
+                            styles.unsplashTile,
+                            backgroundId === 'unsplash' && unsplashPhoto?.id === photo.id
+                              ? styles.unsplashTileSelected
+                              : null,
+                            pressed && styles.pressed,
+                          ]}>
+                          <Image
+                            accessible={false}
+                            contentFit="cover"
+                            source={{ uri: photo.thumbUrl }}
+                            style={styles.unsplashTileImage}
+                          />
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+
+                  {backgroundId === 'unsplash' && unsplashPhoto ? (
+                    <Text style={styles.unsplashCredit}>
+                      Foto av{' '}
+                      <Text
+                        accessibilityRole="link"
+                        onPress={() => void WebBrowser.openBrowserAsync(photographerUrl(unsplashPhoto.photographerUsername))}
+                        style={styles.unsplashCreditLink}>
+                        {unsplashPhoto.photographerName}
+                      </Text>
+                      {' på '}
+                      <Text
+                        accessibilityRole="link"
+                        onPress={() => void WebBrowser.openBrowserAsync(UNSPLASH_HOME_URL)}
+                        style={styles.unsplashCreditLink}>
+                        Unsplash
+                      </Text>
                     </Text>
-                    <Ionicons name="arrow-forward" size={19} color={palette.accentInk} />
-                  </Pressable>
-                ) : (
-                  <View style={styles.checkingRow}>
-                    <ActivityIndicator color={palette.accent} />
-                    <Text style={styles.checkingText}>Kontrollerar sparad inloggning…</Text>
-                  </View>
-                )}
-
-                <View style={[styles.signInAssurances, isSignedOutLandscape && styles.signInAssurancesLandscape]}>
-                  <View style={styles.assuranceRow}>
-                    <Ionicons name="key-outline" size={19} color={palette.accent} />
-                    <Text style={styles.assuranceText}>Du behöver normalt bara logga in en gång.</Text>
-                  </View>
-                  <View style={styles.assuranceRow}>
-                    <Ionicons name="shield-checkmark-outline" size={19} color={palette.accent} />
-                    <Text style={styles.assuranceText}>Din inloggning och dina gränser stannar på din iPhone.</Text>
-                  </View>
+                  ) : null}
                 </View>
-              </View>
-            </View>
-          )}
-
-          <ServiceStatusPanel
-            isRefreshing={isRefreshingStatus}
-            onRefresh={() => void refreshServiceStatus()}
-            statuses={providerStatuses}
-            styles={styles}
-          />
-
-          {errorMessage && snapshot ? (
-            <View accessibilityLiveRegion="polite" style={styles.errorCard}>
-              <Ionicons name="warning" size={18} color={palette.danger} />
-              <View style={styles.errorBody}>
-                <Text style={styles.errorText}>{errorMessage}</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={needsSignIn ? showLogin : () => refresh()}
-                  style={({ pressed }) => [styles.errorAction, pressed && styles.pressed]}>
-                  <Text style={styles.errorActionText}>{needsSignIn ? 'Logga in igen' : 'Försök igen'}</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : null}
-          </Animated.View>
-        </ScrollView>
-        </SafeAreaView>
-      )}
-
-      <Modal
-        animationType="slide"
-        onRequestClose={dismissLogin}
-        presentationStyle="pageSheet"
-        visible={isShowingLogin}>
-        <SafeAreaView accessibilityViewIsModal style={styles.loginSafeArea} edges={['top', 'bottom', 'left', 'right']}>
-          <View style={styles.loginHeader}>
-            <Pressable accessibilityLabel="Stäng inloggningen" accessibilityRole="button" onPress={dismissLogin} hitSlop={12} style={styles.headerActionHitbox}>
-              <Text style={styles.loginAction}>Avbryt</Text>
-            </Pressable>
-            <Text style={styles.loginTitle}>
-              {activeProvider === 'codex' ? 'Anslut Codex' : 'Logga in på Claude'}
-            </Text>
-            <View style={styles.loginHeaderSpacer} />
-          </View>
-          <View accessibilityLiveRegion="polite" style={styles.loginHint}>
-            {isRefreshing || codexLogin?.phase === 'starting' || codexLogin?.phase === 'finishing'
-              ? <ActivityIndicator size="small" color={palette.accent} />
-              : <AppSymbol fallback={activeProvider === 'codex' ? 'key-outline' : 'mail-outline'} name={activeProvider === 'codex' ? 'key' : 'envelope'} size={18} color={palette.accent} />}
-            <Text style={styles.loginHintText}>{loginStatus}</Text>
-          </View>
-          {activeProvider === 'codex' ? (
-            <ScrollView
-              style={styles.deviceLoginScroll}
-              contentContainerStyle={styles.deviceLoginPanel}
-              showsVerticalScrollIndicator={false}>
-              <View style={styles.deviceLoginIcon}>
-                <AppSymbol fallback="shield-checkmark-outline" name="checkmark.shield" size={34} color={palette.accent} />
-              </View>
-              <Text style={styles.deviceLoginTitle}>Logga in säkert hos OpenAI</Text>
-              <Text style={styles.deviceLoginText}>
-                Du lämnar appen en kort stund. När du har godkänt återgår du hit och anslutningen slutförs automatiskt.
-              </Text>
-
-              {codexLogin?.authorization ? (
-                <>
-                  <View style={styles.deviceCodeBlock}>
-                    <Text style={styles.deviceCodeLabel}>DIN ENGÅNGSKOD</Text>
-                    <Text selectable style={styles.deviceCode}>{codexLogin.authorization.userCode}</Text>
-                    <Text style={styles.deviceCodeCountdown}>{formatCountdown(codexLogin.authorization.expiresAt, now)}</Text>
-                  </View>
-                  <View style={styles.deviceSteps}>
-                    <View style={styles.deviceStep}>
-                      <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>1</Text></View>
-                      <Text style={styles.deviceStepText}>Kopiera koden och öppna OpenAI.</Text>
-                    </View>
-                    <View style={styles.deviceStep}>
-                      <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>2</Text></View>
-                      <Text style={styles.deviceStepText}>Klistra in koden och godkänn.</Text>
-                    </View>
-                    <View style={styles.deviceStep}>
-                      <View style={styles.deviceStepNumber}><Text style={styles.deviceStepNumberText}>3</Text></View>
-                      <Text style={styles.deviceStepText}>Gå tillbaka hit. Resten sker automatiskt.</Text>
-                    </View>
-                  </View>
-                </>
               ) : null}
-
-              {codexLogin?.phase === 'starting' || codexLogin?.phase === 'finishing' ? (
-                <ActivityIndicator size="large" color={palette.accent} />
-              ) : codexLogin?.phase === 'error' ? (
-                <View style={styles.deviceActionStack}>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => void startCodexLogin()}
-                    style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
-                    <Text style={styles.deviceLoginButtonText}>Försök igen</Text>
-                    <AppSymbol fallback="refresh" name="arrow.clockwise" size={19} color={palette.accentInk} />
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={openCodexSecuritySettings}
-                    style={({ pressed }) => [styles.deviceLoginSecondaryButton, pressed && styles.pressed]}>
-                    <Text style={styles.deviceLoginSecondaryButtonText}>Kontrollera OpenAI-inställning</Text>
-                  </Pressable>
-                </View>
-              ) : codexLogin?.authorization ? (
-                <Pressable
-                  accessibilityLabel="Kopiera engångskoden och öppna OpenAI"
-                  accessibilityRole="button"
-                  onPress={() => void copyCodeAndOpenCodex()}
-                  style={({ pressed }) => [styles.deviceLoginButton, pressed && styles.pressed]}>
-                  <Text style={styles.deviceLoginButtonText}>{isCodexCodeCopied ? 'Öppna OpenAI igen' : 'Kopiera kod och öppna OpenAI'}</Text>
-                  <AppSymbol fallback="open-outline" name="arrow.up.forward.app" size={19} color={palette.accentInk} />
-                </Pressable>
-              ) : null}
-
-              {codexLogin?.errorMessage ? <Text style={styles.deviceLoginError}>{codexLogin.errorMessage}</Text> : null}
-              <Text style={styles.deviceLoginPrivacy}>Inloggningen sparas säkert i iOS-nyckelringen på den här enheten.</Text>
             </ScrollView>
-          ) : (
-            <View style={styles.webViewHost}>
-              <WebView
-                ref={loginWebViewRef}
-                source={{ uri: webSourceURL }}
-                style={styles.webView}
-                javaScriptEnabled
-                domStorageEnabled
-                sharedCookiesEnabled
-                thirdPartyCookiesEnabled
-                javaScriptCanOpenWindowsAutomatically
-                setSupportMultipleWindows={false}
-                userAgent={SAFARI_USER_AGENT}
-                injectedJavaScriptBeforeContentLoaded={CLAUDE_LOGIN_GUARD_SCRIPT}
-                onLoadEnd={handleLoadEnd}
-                onMessage={handleMessage}
-                onNavigationStateChange={handleNavigationChange}
-                onOpenWindow={handleOpenWindow}
-                onShouldStartLoadWithRequest={handleShouldStartLoad}
-                onError={() => setLoginStatus('Claude-sidan kunde inte laddas. Kontrollera nätverket.')}
-              />
-            </View>
-          )}
-        </SafeAreaView>
-      </Modal>
+          </SafeAreaView>
+        </Modal>
 
-      <Modal
-        animationType="slide"
-        onRequestClose={() => setIsShowingAccount(false)}
-        presentationStyle="pageSheet"
-        visible={isShowingAccount}>
-        <SafeAreaView accessibilityViewIsModal style={styles.accountSheet} edges={['top', 'bottom', 'left', 'right']}>
-          <View style={styles.loginHeader}>
-            <View style={styles.loginHeaderSpacer} />
-            <Text style={styles.loginTitle}>Konto</Text>
-            <Pressable accessibilityLabel="Stäng konto" accessibilityRole="button" hitSlop={12} onPress={() => setIsShowingAccount(false)} style={styles.headerActionHitbox}>
-              <Text style={[styles.loginAction, styles.loginActionRight]}>Stäng</Text>
-            </Pressable>
-          </View>
-          <View style={styles.accountContent}>
-            <View style={styles.accountIcon}>
-              <AppSymbol fallback="person-outline" name="person.crop.circle.fill" size={44} color={palette.accent} />
+        <Modal
+          animationType="slide"
+          onRequestClose={() => setIsShowingAccount(false)}
+          presentationStyle="pageSheet"
+          visible={isShowingAccount}>
+          <SafeAreaView accessibilityViewIsModal style={styles.accountSheet} edges={['top', 'bottom', 'left', 'right']}>
+            <View style={styles.loginHeader}>
+              <View style={styles.loginHeaderSpacer} />
+              <Text style={styles.loginTitle}>Konto</Text>
+              <Pressable accessibilityLabel="Stäng konto" accessibilityRole="button" hitSlop={12} onPress={() => setIsShowingAccount(false)} style={styles.headerActionHitbox}>
+                <Text style={[styles.loginAction, styles.loginActionRight]}>Stäng</Text>
+              </Pressable>
             </View>
-            <Text style={styles.accountTitle}>{PROVIDER_META[activeProvider].label} är anslutet</Text>
-            <Text style={styles.accountText}>Appen använder den sparade inloggningen för att hämta dina gränser. Inga lösenord sparas i appen.</Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={disconnectProvider}
-              style={({ pressed }) => [styles.disconnectButton, pressed && styles.pressed]}>
-              <AppSymbol fallback="log-out-outline" name="rectangle.portrait.and.arrow.right" size={19} color={palette.danger} />
-              <Text style={styles.disconnectButtonText}>Koppla från {PROVIDER_META[activeProvider].label}</Text>
-            </Pressable>
-          </View>
-        </SafeAreaView>
-      </Modal>
-    </View>
+            <View style={styles.accountContent}>
+              <View style={styles.accountIcon}>
+                <AppSymbol fallback="person-outline" name="person.crop.circle.fill" size={44} color={palette.accent} />
+              </View>
+              <Text style={styles.accountTitle}>{PROVIDER_META[activeProvider].label} är anslutet</Text>
+              <Text style={styles.accountText}>Appen använder den sparade inloggningen för att hämta dina gränser. Inga lösenord sparas i appen.</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={disconnectProvider}
+                style={({ pressed }) => [styles.disconnectButton, pressed && styles.pressed]}>
+                <AppSymbol fallback="log-out-outline" name="rectangle.portrait.and.arrow.right" size={19} color={palette.danger} />
+                <Text style={styles.disconnectButtonText}>Koppla från {PROVIDER_META[activeProvider].label}</Text>
+              </Pressable>
+            </View>
+          </SafeAreaView>
+        </Modal>
+      </View>
+    </GlassBackdropProvider>
   );
+}
+
+/** Each failure gets copy that says what to do, not just that something broke. */
+function unsplashFailureMessage(reason: UnsplashFailure): string {
+  if (reason === 'no-key') {
+    return 'Unsplash-sökning är inte konfigurerad. Lägg EXPO_PUBLIC_UNSPLASH_ACCESS_KEY i .env.local och starta om servern.';
+  }
+  if (reason === 'unauthorized') return 'Unsplash nekade nyckeln. Kontrollera att åtkomstnyckeln är rätt.';
+  if (reason === 'rate-limited') {
+    return 'Unsplash-gränsen är nådd. Demoappar får 50 sökningar i timmen, försök igen senare.';
+  }
+  if (reason === 'network') return 'Kunde inte nå Unsplash. Kontrollera internet och försök igen.';
+  return 'Unsplash svarade med något appen inte kunde läsa.';
 }
 
 function wait(milliseconds: number): Promise<void> {

@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { UsageSnapshot, UsageWindow } from '@/src/domain/usage';
 import { DashboardStyles } from '@/src/features/dashboard/dashboardStyles';
+import { GlassPane } from '@/src/features/dashboard/GlassSurface';
 import { Palette, ProviderTheme, UsageProvider } from '@/src/features/dashboard/dashboardTheme';
 import {
   formatMonitorTitle,
@@ -88,6 +89,7 @@ export function ProviderSwitcher({
   const providers = isMonitor ? MONITOR_PROVIDERS : PROVIDERS;
   return (
     <View style={isMonitor ? styles.monitorProviderSwitcher : styles.providerSwitcher}>
+      <GlassPane radius={isMonitor ? 14 : 15} />
       {providers.map((provider) => {
         const selected = provider === activeProvider;
         const labelStyle = isMonitor ? styles.monitorProviderOptionText : styles.providerOptionText;
@@ -353,6 +355,7 @@ export function LandscapeMonitor({
           ) : (
             <>
               <View style={styles.monitorPrimary}>
+                <GlassPane radius={16} />
                 <View style={styles.monitorPrimaryHeader}>
                   <Text style={styles.monitorPrimaryTitle}>{formatMonitorTitle(primaryWindow)}</Text>
                   <View style={styles.monitorRemainingBadge}>
@@ -543,6 +546,7 @@ function MonitorSecondaryPanel({
       onTouchStart={beginReveal}
       style={styles.monitorSecondaryPanel}
       testID="monitor-history-reveal">
+      <GlassPane radius={16} />
       <View
         onLayout={(event) => setFaceHeight(event.nativeEvent.layout.height)}
         style={styles.monitorSecondaryFaces}
@@ -679,6 +683,7 @@ export function PrimaryUsagePanel({
 
   return (
     <View style={styles.primaryPanel}>
+      <GlassPane radius={16} />
       <View style={styles.primaryHeader}>
         <Text style={styles.primaryLabel}>{formatWindowTitle(window)}</Text>
         <View style={styles.remainingBadge}>
@@ -789,6 +794,7 @@ export function UsageHistoryPanel({
       </View>
 
       <View style={styles.historyCard}>
+        <GlassPane radius={16} />
         {latest === null ? (
           <View style={styles.historyEmpty}>
             <Ionicons name="analytics-outline" size={24} color={styles.historyEmptyText.color} />
@@ -853,6 +859,7 @@ export function ServiceStatusPanel({
           disabled={isRefreshing}
           onPress={onRefresh}
           style={({ pressed }) => [styles.statusRefreshButton, pressed && styles.pressed]}>
+          <GlassPane radius={12} />
           {isRefreshing
             ? <ActivityIndicator size="small" color={styles.statusRefreshIcon.color} />
             : <Ionicons name="refresh" size={17} color={styles.statusRefreshIcon.color} />}
@@ -860,6 +867,7 @@ export function ServiceStatusPanel({
       </View>
 
       <View style={styles.statusCard}>
+        <GlassPane radius={16} />
         {PROVIDERS.map((provider, index) => {
           const condition = statuses?.[provider].condition ?? 'unavailable';
           return (

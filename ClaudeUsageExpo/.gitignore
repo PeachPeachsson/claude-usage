@@ -32,6 +32,8 @@ yarn-error.*
 
 # local env files
 .env*.local
+# ...but the template that documents which variables exist is meant to be shared.
+!.env.local.example
 
 # typescript
 *.tsbuildinfo
