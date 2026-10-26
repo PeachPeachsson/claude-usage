@@ -72,6 +72,7 @@ import { ProviderBackdrop } from '@/src/features/dashboard/ProviderBackdrop';
 import {
   formatCountdown,
   formatRelativeTime,
+  worstConnection,
   friendlyError,
   friendlyTimeout,
   getProviderFromURL,
@@ -975,6 +976,21 @@ export function UsageDashboard() {
     snapshot && primaryWindow && !isShowingLogin && (isLandscape || isMonitorRequested),
   );
   const isSignedOutLandscape = isLandscape && !snapshot && !isShowingLogin;
+  // The combined monitor shows both providers, so both marks show: each behind its own card.
+  const isCombinedMonitor = isMonitorMode && monitorProvider === 'both';
+  const backdrop = isCombinedMonitor ? (
+    <ProviderBackdrop
+      color={providerTheme.monitorAccent}
+      combinedColors={{
+        claude: PROVIDER_THEMES[appearance].claude.monitorAccent,
+        codex: PROVIDER_THEMES[appearance].codex.monitorAccent,
+      }}
+      provider={activeProvider}
+      reduceMotion={reduceMotion}
+    />
+  ) : (
+    <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
+  );
 
   return (
     <GlassBackdropProvider
@@ -988,10 +1004,10 @@ export function UsageDashboard() {
             customUri={customBackgroundUri}
             remoteUrl={unsplashPhoto?.imageUrl ?? null}
             targetRef={blurTargetRef}>
-            <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
+            {backdrop}
           </AppBackground>
         ) : (
-          <ProviderBackdrop provider={activeProvider} color={providerTheme.monitorAccent} reduceMotion={reduceMotion} />
+          backdrop
         )}
         <WebView
           key={`claude-transport-${transportKey}`}
@@ -1013,6 +1029,12 @@ export function UsageDashboard() {
         {isMonitorMode && snapshot && primaryWindow ? (
           <LandscapeMonitor
             activeProvider={activeProvider}
+            connection={worstConnection(
+              (monitorProvider === 'both' ? PROVIDERS : [activeProvider]).map((provider) => ({
+                needsSignIn: needsSignInByProvider[provider],
+                hasError: Boolean(errorMessages[provider]),
+              })),
+            )}
             historyPoints={usageHistory[activeProvider]}
             isCompact={width < 760}
             isRefreshing={isRefreshing}

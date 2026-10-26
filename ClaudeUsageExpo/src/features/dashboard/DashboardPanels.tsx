@@ -34,6 +34,7 @@ import {
   providerForSwipe,
   REVEAL_CLAIM_DISTANCE,
   SWIPE_CLAIM_DISTANCE,
+  type MonitorConnection,
 } from '@/src/features/dashboard/dashboardModel';
 import {
   getServiceStatusLabel,
@@ -140,9 +141,16 @@ export function ProviderSwitcher({
   );
 }
 
+const MONITOR_CONNECTION_TEXT: Record<MonitorConnection, string> = {
+  live: 'anslutet',
+  stale: 'senast hämtat',
+  signin: 'inloggning krävs',
+};
+
 export function LandscapeMonitor({
   activeProvider,
   historyPoints,
+  connection,
   isCompact,
   isRefreshing,
   monitorProvider,
@@ -159,6 +167,7 @@ export function LandscapeMonitor({
 }: {
   activeProvider: UsageProvider;
   historyPoints: UsageHistoryPoint[];
+  connection: MonitorConnection;
   isCompact: boolean;
   isRefreshing: boolean;
   monitorProvider: MonitorProvider;
@@ -289,15 +298,17 @@ export function LandscapeMonitor({
         testID="monitor-swipe-area">
         <View style={styles.monitorHeader}>
           <View style={styles.monitorIdentity}>
-            <Text style={styles.monitorBrand}>Usage</Text>
-            <View style={styles.monitorConnection}>
-              <View style={[styles.monitorStatusDot, styles.monitorLiveDot]} />
-              {!isCompact ? (
-                <Text style={styles.monitorConnectionText}>
-                  {monitorProvider === 'both' ? 'Claude + Codex' : `${PROVIDER_META[activeProvider].label} · anslutet`}
+            <View style={[styles.monitorStatusDot, connection === 'live' ? styles.monitorLiveDot : connection === 'stale' ? styles.monitorStaleDot : styles.monitorSignInDot]} />
+            {!isCompact ? (
+              <View style={styles.monitorStatusText}>
+                <Text numberOfLines={1} style={styles.monitorConnectionText}>
+                  {`${monitorProvider === 'both' ? 'Claude + Codex' : PROVIDER_META[activeProvider].label} · ${MONITOR_CONNECTION_TEXT[connection]}`}
                 </Text>
-              ) : null}
-            </View>
+                <Text numberOfLines={1} style={styles.monitorUpdated}>
+                  {`Uppdaterad ${formatRelativeTime(monitorFetchedAt)}`}
+                </Text>
+              </View>
+            ) : null}
           </View>
 
           <ProviderSwitcher
@@ -308,9 +319,6 @@ export function LandscapeMonitor({
           />
 
           <View style={styles.monitorHeaderActions}>
-            {!isCompact ? (
-              <Text style={styles.monitorUpdated}>{`Uppdaterad ${formatRelativeTime(monitorFetchedAt)}`}</Text>
-            ) : null}
             <Pressable
               accessibilityLabel="Uppdatera gränser"
               accessibilityRole="button"
@@ -330,7 +338,6 @@ export function LandscapeMonitor({
               onPress={onExit}
               style={({ pressed }) => [styles.monitorExitButton, pressed && styles.monitorPressed]}>
               <AppSymbol fallback="close" name="xmark" size={19} color="#FFFFFF" />
-              <Text style={styles.monitorExitText}>Stäng</Text>
             </Pressable>
           </View>
         </View>

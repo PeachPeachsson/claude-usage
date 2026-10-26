@@ -32,6 +32,8 @@ Undvik generiska AI-dashboard-mönster: beige pappersbakgrund, stora upprepade k
 
 Standardutseendet följer systemets ljusa eller mörka läge, vilket håller förstagångsupplevelsen inom varumärkets lugna och diskreta ton. Glasutseendet, med frostade ytor över en valbar bakgrund, är något användaren väljer aktivt snarare än något appen börjar i. Det är en avsiktlig avgränsning: en fotografisk bakgrund är dekorativ på ett sätt som anti-referenserna ovan varnar för, och den avvägningen bör vara användarens.
 
+Den liggande monitorn är medvetet alltid mörk, oavsett systemets läge. Den är en dockad nattvy som ska vara läsbar på avstånd, så den följer inte ljust och mörkt som porträttvyn gör.
+
 Varje panel i glasutseendet är mätt mot WCAG AA i sitt värsta fall, inklusive en okänd bakgrundsbild. Kontrasten bärs av panelens egen ton, inte av att bilden råkar vara mörk.
 
 ## Accessibility & Inclusion

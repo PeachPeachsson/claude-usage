@@ -91,6 +91,15 @@ export function formatCountdown(expiresAt: Date, currentTime: number): string {
     : 'Koden har gått ut';
 }
 
+export type MonitorConnection = 'live' | 'stale' | 'signin';
+
+/** Sign-in beats a failed fetch, which beats a clean one; the monitor shows the worst case. */
+export function worstConnection(states: { needsSignIn: boolean; hasError: boolean }[]): MonitorConnection {
+  if (states.some((state) => state.needsSignIn)) return 'signin';
+  if (states.some((state) => state.hasError)) return 'stale';
+  return 'live';
+}
+
 export function formatWindowTitle(window: UsageWindow): string {
   if (window.id === 'five-hour') return '5-timmarsgräns';
   if (window.id === 'weekly') return 'Veckogräns';
